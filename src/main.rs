@@ -7,6 +7,61 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 use tokio::time::sleep;
+use walkdir::WalkDir;
+
+// ── YAML config structs ──
+
+#[derive(Deserialize, Debug, Default)]
+struct ShieldConfig {
+    project: Option<ProjectConfig>,
+    build: Option<BuildConfig>,
+    endpoints: Option<Vec<EndpointConfig>>,
+    database: Option<DatabaseConfig>,
+    auth: Option<AuthConfig>,
+    files: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+struct ProjectConfig {
+    name: Option<String>,
+    framework: Option<String>,
+    language: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+struct BuildConfig {
+    command: Option<String>,
+    run: Option<String>,
+    port: Option<u16>,
+}
+
+#[derive(Deserialize, Debug)]
+struct EndpointConfig {
+    path: String,
+    method: Option<String>,
+    params: Option<Vec<ParamConfig>>,
+    description: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct ParamConfig {
+    name: String,
+    #[serde(rename = "type")]
+    param_type: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+struct DatabaseConfig {
+    #[serde(rename = "type")]
+    db_type: Option<String>,
+    orm: Option<bool>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+struct AuthConfig {
+    enabled: Option<bool>,
+}
 
 #[derive(Debug)]
 struct TargetConfig {
@@ -22,9 +77,35 @@ struct ToolCall {
     target: String,
 }
 
+fn load_shield_config() -> Option<ShieldConfig> {
+    let yaml_path = Path::new("shieldci.yml");
+    if yaml_path.exists() {
+        let content = fs::read_to_string(yaml_path).ok()?;
+        let config: ShieldConfig = serde_yaml::from_str(&content).ok()?;
+        println!("📋 Loaded shieldci.yml configuration");
+        Some(config)
+    } else {
+        println!("⚠️  No shieldci.yml found, falling back to auto-detection");
+        None
+    }
+}
+
+fn config_from_yaml(shield: &ShieldConfig) -> TargetConfig {
+    let build = shield.build.as_ref();
+    let project = shield.project.as_ref();
+    let port = build.and_then(|b| b.port).unwrap_or(3000);
+
+    TargetConfig {
+        framework: project.and_then(|p| p.framework.clone()).unwrap_or_else(|| "Unknown".to_string()),
+        build_command: build.and_then(|b| b.command.clone()).unwrap_or_default(),
+        run_command: build.and_then(|b| b.run.clone()).unwrap_or_default(),
+        target_url: format!("http://127.0.0.1:{}", port),
+    }
+}
+
 fn fetch_config_from_shell() -> TargetConfig {
-    println!("🔍 Calling detect.sh to scout the repository...");
-    if !Path::new("detect.sh").exists() {
+    println!("🔍 Calling run.sh to scout the repository...");
+    if !Path::new("run.sh").exists() {
         return TargetConfig {
             framework: "Node.js".to_string(),
             build_command: "npm install".to_string(),
@@ -33,7 +114,7 @@ fn fetch_config_from_shell() -> TargetConfig {
         };
     }
 
-    let output = Command::new("bash").arg("detect.sh").output().expect("Failed to execute detect.sh");
+    let output = Command::new("bash").arg("run.sh").output().expect("Failed to execute run.sh");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut config_map = HashMap::new();
     for line in stdout.lines() {
@@ -80,11 +161,47 @@ async fn wait_for_target(url: &str, max_retries: u8) -> Result<(), String> {
     Err(format!("❌ Target {} failed to respond.", url))
 }
 
+fn build_endpoint_context(config: &ShieldConfig, base_url: &str) -> String {
+    let docker_base = base_url.replace("127.0.0.1", "host.docker.internal");
+    let mut info = String::from("Known API endpoints (from shieldci.yml):\n");
+
+    if let Some(ref endpoints) = config.endpoints {
+        for ep in endpoints {
+            let method = ep.method.as_deref().unwrap_or("GET");
+            let desc = ep.description.as_deref().unwrap_or("");
+            info.push_str(&format!("  {} {} - {}\n", method, ep.path, desc));
+
+            if let Some(ref params) = ep.params {
+                for p in params {
+                    let ptype = p.param_type.as_deref().unwrap_or("string");
+                    let pdesc = p.description.as_deref().unwrap_or("");
+                    info.push_str(&format!("    param: {}({}) - {}\n", p.name, ptype, pdesc));
+                }
+                // Build example attack URL
+                let param_str: Vec<String> = params.iter().map(|p| format!("{}=test", p.name)).collect();
+                info.push_str(&format!(
+                    "    attack URL: {}{}?{}\n",
+                    docker_base, ep.path, param_str.join("&")
+                ));
+            }
+        }
+    }
+    info
+}
+
 fn flatten_codebase(dir: &str) -> String {
     println!("Recursively flattening codebase for full context...");
     let mut full_code = String::new();
+    let skip_dirs = ["node_modules", ".git", "target", "dist", "build", "__pycache__", ".next"];
 
-    for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(dir)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            !skip_dirs.iter().any(|d| name == *d)
+        })
+        .filter_map(|e| e.ok())
+    {
         let path = entry.path();
         if path.is_file() && (path.extension().map_or(false, |ext| ext == "js" || ext == "py" || ext == "ts")) {
             if let Ok(content) = fs::read_to_string(path) {
@@ -100,7 +217,7 @@ async fn ask_llm(system_prompt: &str) -> ToolCall {
     println!("🧠 Invoking local model via Ollama API...");
     let client = Client::new();
     let req_body = serde_json::json!({
-        "model": "qwen2.5-coder:7b",
+        "model": "llama3.1",
         "prompt": system_prompt,
         "stream": false,
         "format": "json"
@@ -128,7 +245,7 @@ async fn execute_mcp_tool_stdio(tool_call: &ToolCall) -> Result<String, Box<dyn 
     println!("🤝 Initiating MCP Handshake & Strike: {} on {}", tool_call.tool, tool_call.target);
     
     let mut child = Command::new("docker")
-        .args(["run", "-i", "--rm", "--network", "host", "shieldci-kali-image"])
+        .args(["run", "-i", "--rm", "shieldci-kali-image"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;
@@ -143,8 +260,13 @@ async fn execute_mcp_tool_stdio(tool_call: &ToolCall) -> Result<String, Box<dyn 
     let mut line = String::new();
     reader.read_line(&mut line)?;
 
-    // Step 2: Call Tool
-    let mcp_args = serde_json::json!({ "url": tool_call.target.replace("127.0.0.1", "host.docker.internal") });
+    // Step 2: Call Tool — nmap_scan uses "target" param, others use "url"
+    let target_url = tool_call.target.replace("127.0.0.1", "host.docker.internal");
+    let mcp_args = if tool_call.tool == "nmap_scan" {
+        serde_json::json!({ "target": target_url })
+    } else {
+        serde_json::json!({ "url": target_url })
+    };
     let call = serde_json::json!({
         "jsonrpc": "2.0", "id": 2, "method": "tools/call",
         "params": { "name": tool_call.tool, "arguments": mcp_args }
@@ -163,50 +285,241 @@ async fn generate_report(trace: &str, codebase: &str, success: bool) -> String {
     let status = if success { "VULNERABILITY DISCOVERED" } else { "NO VULNERABILITIES DETECTED" };
     
     let prompt = format!(
-        "Generate a professional Markdown security report for status: {}.\nLogs:\n{}\nSource:\n{}",
-        status, trace, codebase
+        r#"You are a senior security engineer writing a detailed penetration test report in Markdown.
+
+Status: {status}
+
+## Instructions
+Write the report with these EXACT sections:
+
+# ShieldCI Security Report
+
+## Executive Summary
+Brief overview of what was tested and the outcome.
+
+## Scan Results
+For each test that was run, describe:
+- What tool was used and what it targeted
+- What was found (quote key findings from the logs)
+- Severity rating (Critical / High / Medium / Low / Info)
+
+## Vulnerability Details
+For EACH vulnerability found:
+### [Vulnerability Name]
+- **Severity**: Critical/High/Medium/Low
+- **Location**: file path and line number
+- **Description**: what the vulnerability is
+
+#### Vulnerable Code
+```
+(paste the exact vulnerable code snippet from the source)
+```
+
+#### Recommended Fix
+```
+(write the corrected code snippet that fixes the vulnerability)
+```
+
+#### Explanation
+Why the original code is vulnerable and how the fix resolves it.
+
+## Security Headers & Configuration
+List any missing security headers or misconfigurations found.
+
+## Recommendations
+Numbered list of actionable security improvements.
+
+---
+
+## Raw Data
+
+Tool scan logs:
+{trace}
+
+Application source code:
+{codebase}
+
+IMPORTANT: You MUST include actual code snippets from the source code showing vulnerable lines, and write corrected versions. Do NOT skip the code sections."#
     );
 
-    let req_body = serde_json::json!({"model": "qwen2.5-coder:7b", "prompt": prompt, "stream": false});
+    let req_body = serde_json::json!({"model": "llama3.1", "prompt": prompt, "stream": false});
     let res = client.post("http://localhost:11434/api/generate").json(&req_body).send().await.expect("Ollama error");
     let res_json: serde_json::Value = res.json().await.unwrap();
     res_json["response"].as_str().unwrap_or("Report failed.").to_string()
 }
 
+/// Generate a dynamic test plan based on the repo's YAML config.
+/// Each test is a (phase_name, tool, target) triple.
+fn generate_test_plan(shield_config: &Option<ShieldConfig>, docker_url: &str) -> Vec<(String, String, String)> {
+    let mut plan: Vec<(String, String, String)> = Vec::new();
+
+    // Phase 1: Always start with recon
+    plan.push(("RECON: Port Scan".into(), "nmap_scan".into(), docker_url.into()));
+    plan.push(("RECON: Security Headers".into(), "check_headers".into(), docker_url.into()));
+
+    // Phase 2: Web vulnerability scanning
+    plan.push(("VULN SCAN: Web Server".into(), "nikto_scan".into(), docker_url.into()));
+
+    // Phase 3: Directory discovery
+    plan.push(("DISCOVERY: Hidden Paths".into(), "gobuster_scan".into(), docker_url.into()));
+
+    // Phase 4: Endpoint-specific attacks from YAML config
+    if let Some(ref sc) = shield_config {
+        let uses_raw_sql = sc.database.as_ref()
+            .map(|db| db.orm.unwrap_or(true) == false)
+            .unwrap_or(false);
+
+        if let Some(ref endpoints) = sc.endpoints {
+            for ep in endpoints {
+                if let Some(ref params) = ep.params {
+                    if params.is_empty() { continue; }
+
+                    // Build attack URL with test params
+                    let param_str: Vec<String> = params.iter()
+                        .map(|p| format!("{}=test", p.name))
+                        .collect();
+                    let attack_url = format!("{}{}?{}", docker_url, ep.path, param_str.join("&"));
+
+                    // SQL injection test for endpoints with params, especially if raw SQL
+                    if uses_raw_sql {
+                        plan.push((
+                            format!("SQLi: {} {}", ep.method.as_deref().unwrap_or("GET"), ep.path),
+                            "sqlmap_scan".into(),
+                            attack_url.clone(),
+                        ));
+                    }
+
+                    // Always test endpoints with user input for SQLi
+                    let has_user_input = params.iter().any(|p| {
+                        let name = p.name.to_lowercase();
+                        let desc = p.description.as_deref().unwrap_or("").to_lowercase();
+                        name.contains("user") || name.contains("pass") || name.contains("search")
+                            || name.contains("query") || name.contains("id") || name.contains("name")
+                            || name.contains("email") || name.contains("token")
+                            || desc.contains("database") || desc.contains("sql")
+                    });
+
+                    if has_user_input && !uses_raw_sql {
+                        plan.push((
+                            format!("SQLi: {} {}", ep.method.as_deref().unwrap_or("GET"), ep.path),
+                            "sqlmap_scan".into(),
+                            attack_url,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Deduplicate
+    plan.dedup_by(|a, b| a.1 == b.1 && a.2 == b.2);
+    plan
+}
+
 #[tokio::main]
 async fn main() {
     println!("🛡️ Booting ShieldCI Orchestrator...");
-    let config = fetch_config_from_shell();
+
+    let shield_config = load_shield_config();
+    let config = if let Some(ref sc) = shield_config {
+        config_from_yaml(sc)
+    } else {
+        fetch_config_from_shell()
+    };
+
     launch_sandbox(&config);
     let _ = wait_for_target(&config.target_url, 15).await;
 
     let codebase = flatten_codebase(".");
-    let mut attack_trace = String::new();
-    let mut exploit_found = false;
+    let docker_url = config.target_url.replace("127.0.0.1", "host.docker.internal");
 
-    let mut prompt = format!("You are an Elite Red Team Auditor. Target: http://host.docker.internal:3000. \
-    Phase 1: RECON. Use nmap_scan or check_headers to understand the target. \
-    Phase 2: VULNERABILITY RESEARCH. Use nikto_scan or gobuster_scan to find weak points. \
-    Phase 3: EXPLOITATION. Use sqlmap_scan if you find database entry points. \
-    
-    Codebase context for logic flaws: {}\n\n\
-    Return ONLY JSON with 'tool' and 'target'.", codebase
-    );
-
-    for i in 1..=3 {
-        println!("\n--- Strike Iteration {} ---", i);
-        let tool_call = ask_llm(&prompt).await;
-        let output = execute_mcp_tool_stdio(&tool_call).await.unwrap_or_else(|e| e.to_string());
-        
-        attack_trace.push_str(&format!("\nIteration {}: {}\n", i, output));
-        
-        if output.to_lowercase().contains("vulnerable") || output.to_lowercase().contains("payload") {
-            exploit_found = true;
-            break;
-        }
-        prompt.push_str(&format!("\nObservation: {}", output));
+    // ── Generate dynamic test plan ──
+    let test_plan = generate_test_plan(&shield_config, &docker_url);
+    println!("\n📋 Test Plan ({} tests):", test_plan.len());
+    for (i, (phase, tool, target)) in test_plan.iter().enumerate() {
+        println!("  {}. [{}] {} → {}", i + 1, phase, tool, target);
     }
 
+    let mut attack_trace = String::new();
+    let mut exploit_found = false;
+    let total = test_plan.len();
+
+    // ── Execute each planned test ──
+    for (i, (phase, tool, target)) in test_plan.iter().enumerate() {
+        println!("\n--- Test {}/{}: {} ---", i + 1, total, phase);
+
+        let tool_call = ToolCall { tool: tool.clone(), target: target.clone() };
+        let output = execute_mcp_tool_stdio(&tool_call).await.unwrap_or_else(|e| e.to_string());
+
+        attack_trace.push_str(&format!(
+            "\n## Test {}: {} ({})\nTool: {} | Target: {}\n{}\n",
+            i + 1, phase, if output.to_lowercase().contains("vulnerable") || output.to_lowercase().contains("payload") { "VULNERABLE" } else { "OK" },
+            tool, target, output
+        ));
+
+        if output.to_lowercase().contains("vulnerable") || output.to_lowercase().contains("payload") {
+            exploit_found = true;
+            println!("🚨 Vulnerability detected in: {}", phase);
+        }
+    }
+
+    // ── LLM-guided adaptive test: let the LLM pick additional attacks based on results ──
+    let endpoint_info = if let Some(ref sc) = shield_config {
+        build_endpoint_context(sc, &config.target_url)
+    } else {
+        String::new()
+    };
+
+    let db_info = if let Some(ref sc) = shield_config {
+        if let Some(ref db) = sc.database {
+            let db_type = db.db_type.as_deref().unwrap_or("unknown");
+            let uses_orm = db.orm.unwrap_or(true);
+            if uses_orm {
+                format!("Database: {} (uses ORM)\n", db_type)
+            } else {
+                format!("Database: {} (raw SQL queries - HIGH RISK for SQL injection!)\n", db_type)
+            }
+        } else { String::new() }
+    } else { String::new() };
+
+    let adaptive_prompt = format!(
+        "You are a penetration tester. Target: {docker_url}\n\
+        \n\
+        Previous scan results:\n{attack_trace}\n\
+        \n\
+        {db_info}\
+        {endpoint_info}\
+        \n\
+        Application source code:\n{codebase}\n\
+        \n\
+        Available tools (use EXACT names):\n\
+        - nmap_scan: target = \"{docker_url}\"\n\
+        - check_headers: target = \"{docker_url}\"\n\
+        - nikto_scan: target = \"{docker_url}\"\n\
+        - gobuster_scan: target = \"{docker_url}\"\n\
+        - sqlmap_scan: target = URL with query params like \"{docker_url}/login?username=test\"\n\
+        \n\
+        Based on the scan results above, pick ONE more test that could reveal something the previous tests missed.\n\
+        Respond with ONLY a JSON object: {{\"tool\": \"<tool_name>\", \"target\": \"<url>\"}}"
+    );
+
+    for i in 1..=2 {
+        println!("\n--- Adaptive Strike {} ---", i);
+        let tool_call = ask_llm(&adaptive_prompt).await;
+        let output = execute_mcp_tool_stdio(&tool_call).await.unwrap_or_else(|e| e.to_string());
+
+        attack_trace.push_str(&format!(
+            "\n## Adaptive Strike {}: {} on {}\n{}\n",
+            i, tool_call.tool, tool_call.target, output
+        ));
+
+        if output.to_lowercase().contains("vulnerable") || output.to_lowercase().contains("payload") {
+            exploit_found = true;
+            println!("🚨 Vulnerability detected by adaptive strike!");
+        }
+    }
+
+    // ── Generate final report ──
     let report = generate_report(&attack_trace, &codebase, exploit_found).await;
     fs::write("SHIELD_REPORT.md", &report).expect("Unable to write report");
     println!("\n--- FINAL REPORT ---\n{}\n✅ Saved to SHIELD_REPORT.md", report);

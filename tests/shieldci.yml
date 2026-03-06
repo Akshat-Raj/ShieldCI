@@ -1,0 +1,35 @@
+# ShieldCI Configuration
+# Place this file in your repo root to configure security scanning.
+
+project:
+  name: "shieldci-target"
+  framework: "Node.js"
+  language: "javascript"
+
+build:
+  command: "npm install"
+  run: "node app.js"
+  port: 3000
+
+endpoints:
+  - path: "/"
+    method: "GET"
+    description: "Health check"
+
+  - path: "/login"
+    method: "GET"
+    params:
+      - name: "username"
+        type: "string"
+        description: "User login name"
+    description: "User login endpoint - queries database"
+
+database:
+  type: "sqlite"
+  orm: false  # raw queries used
+
+auth:
+  enabled: false
+
+files:
+  - "app.js"
