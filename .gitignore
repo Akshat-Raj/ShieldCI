@@ -2,3 +2,6 @@ test.py
 env
 target
 Cargo.lock
+SHIELD_REPORT.md
+tests/main
+tests/node_modules
