@@ -66,16 +66,15 @@ jobs:
       - name: Push results to ShieldCI dashboard
         if: always()
         env:
-          SHIELDCI_API_URL: http://localhost:3000
-          SHIELDCI_API_KEY: fc09420a3737855a3094ff7831a6219565cee6777a0fbeec
           SHIELDCI_REPO: ${{ steps.meta.outputs.repo }}
           SHIELDCI_BRANCH: ${{ steps.meta.outputs.branch }}
           SHIELDCI_COMMIT: ${{ steps.meta.outputs.commit }}
           SHIELDCI_COMMIT_MSG: ${{ steps.meta.outputs.commit_msg }}
           SHIELDCI_DURATION: ${{ steps.scan.outputs.duration }}
           SHIELDCI_TRIGGERED_BY: ${{ steps.meta.outputs.trigger }}
-          SHIELDCI_RESULTS_FILE: ${{ runner.temp }}/../../../Desktop/ShieldCI/tests/shield_results.json
         run: |
+          export SHIELDCI_API_URL="http://localhost:3000"
+          export SHIELDCI_API_KEY="fc09420a3737855a3094ff7831a6219565cee6777a0fbeec"
           export SHIELDCI_RESULTS_FILE="$HOME/Desktop/ShieldCI/tests/shield_results.json"
           python3 "$HOME/Desktop/ShieldCI/push_results.py"
 
