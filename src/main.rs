@@ -105,10 +105,10 @@ fn load_shield_config() -> Option<ShieldConfig> {
     if yaml_path.exists() {
         let content = fs::read_to_string(yaml_path).ok()?;
         let config: ShieldConfig = serde_yaml::from_str(&content).ok()?;
-        println!("📋 Loaded shieldci.yml configuration");
+        println!("Loaded shieldci.yml configuration");
         Some(config)
     } else {
-        println!("⚠️  No shieldci.yml found, falling back to auto-detection");
+        println!("No shieldci.yml found, falling back to auto-detection");
         None
     }
 }
@@ -156,12 +156,12 @@ fn fetch_config_from_shell() -> TargetConfig {
 
 fn launch_sandbox(config: &TargetConfig) {
     if !config.build_command.is_empty() {
-        println!("⚙️  Running build: {}", config.build_command);
+        println!("Running build: {}", config.build_command);
         let parts: Vec<&str> = config.build_command.split_whitespace().collect();
         let _ = Command::new(parts[0]).args(&parts[1..]).status();
     }
 
-    println!("🚀 Launching {} server on {}...", config.framework, config.target_url);
+    println!("Launching {} server", config.framework);
     let run_parts: Vec<&str> = config.run_command.split_whitespace().collect();
     Command::new(run_parts[0])
         .args(&run_parts[1..])
@@ -172,16 +172,16 @@ fn launch_sandbox(config: &TargetConfig) {
 }
 
 async fn wait_for_target(url: &str, max_retries: u8) -> Result<(), String> {
-    println!("⏳ Waiting for target {} to come online...", url);
+    println!("Waiting for target to come online");
     let client = Client::builder().timeout(Duration::from_secs(2)).build().unwrap();
     for _ in 1..=max_retries {
         if client.get(url).send().await.is_ok() {
-            println!("✅ Target is up and responding!");
+            println!("Target is up and responding");
             return Ok(());
         }
         sleep(Duration::from_secs(2)).await;
     }
-    Err(format!("❌ Target {} failed to respond.", url))
+    Err(format!("Target failed to respond."))
 }
 
 fn build_endpoint_context(config: &ShieldConfig, base_url: &str) -> String {
@@ -237,7 +237,7 @@ fn flatten_codebase(dir: &str) -> String {
 }
 
 async fn ask_llm(system_prompt: &str) -> ToolCall {
-    println!("🧠 Invoking local model via Ollama API...");
+    println!("Invoking ShieldCI LLM");
     let client = Client::new();
     let req_body = serde_json::json!({
         "model": "llama3.1",
@@ -265,7 +265,7 @@ async fn ask_llm(system_prompt: &str) -> ToolCall {
 }
 
 async fn execute_mcp_tool_stdio(tool_call: &ToolCall) -> Result<String, Box<dyn std::error::Error>> {
-    println!("🤝 Initiating MCP Handshake & Strike: {} on {}", tool_call.tool, tool_call.target);
+    println!("Initiating MCP Handshake & Strike: {}", tool_call.tool);
     
     let mut child = Command::new("docker")
         .args(["run", "-i", "--rm", "shieldci-kali-image"])
@@ -303,7 +303,7 @@ async fn execute_mcp_tool_stdio(tool_call: &ToolCall) -> Result<String, Box<dyn 
 }
 
 async fn generate_report(trace: &str, codebase: &str, success: bool) -> String {
-    println!("📝 Compiling final security assessment...");
+    println!("Compiling final security assessment");
     let client = Client::new();
     let status = if success { "VULNERABILITY DISCOVERED" } else { "NO VULNERABILITIES DETECTED" };
     
@@ -458,7 +458,7 @@ async fn main() {
 
     // ── Generate dynamic test plan ──
     let test_plan = generate_test_plan(&shield_config, &docker_url);
-    println!("\n📋 Test Plan ({} tests):", test_plan.len());
+    println!("\nTest Plan ({} tests):", test_plan.len());
     for (i, (phase, tool, target)) in test_plan.iter().enumerate() {
         println!("  {}. [{}] {} → {}", i + 1, phase, tool, target);
     }
@@ -469,7 +469,7 @@ async fn main() {
 
     // ── Execute each planned test ──
     for (i, (phase, tool, target)) in test_plan.iter().enumerate() {
-        println!("\n--- Test {}/{}: {} ---", i + 1, total, phase);
+        println!("\nTest {}/{}: {}", i + 1, total, phase);
 
         let tool_call = ToolCall { tool: tool.clone(), target: target.clone() };
         let output = execute_mcp_tool_stdio(&tool_call).await.unwrap_or_else(|e| e.to_string());
@@ -482,7 +482,7 @@ async fn main() {
 
         if output.to_lowercase().contains("vulnerable") || output.to_lowercase().contains("payload") {
             exploit_found = true;
-            println!("🚨 Vulnerability detected in: {}", phase);
+            println!("Vulnerability detected in: {}", phase);
         }
     }
 
@@ -538,14 +538,14 @@ async fn main() {
 
         if output.to_lowercase().contains("vulnerable") || output.to_lowercase().contains("payload") {
             exploit_found = true;
-            println!("🚨 Vulnerability detected by adaptive strike!");
+            println!("Vulnerability detected by adaptive strike!");
         }
     }
 
     // ── Generate final report ──
     let report = generate_report(&attack_trace, &codebase, exploit_found).await;
     fs::write("SHIELD_REPORT.md", &report).expect("Unable to write report");
-    println!("\n--- FINAL REPORT ---\n{}\n✅ Saved to SHIELD_REPORT.md", report);
+    println!("\n--- FINAL REPORT ---\n{}\n Saved to SHIELD_REPORT.md", report);
 
     // ── Write structured JSON output for frontend API ──
     let vulnerabilities = parse_vulns_from_trace(&attack_trace);
@@ -556,7 +556,7 @@ async fn main() {
     };
     let json_output = serde_json::to_string_pretty(&scan_output).unwrap_or_default();
     fs::write("shield_results.json", &json_output).expect("Unable to write results JSON");
-    println!("✅ Saved structured results to shield_results.json");
+    println!("Saved structured results to shield_results.json");
 }
 
 /// Extract vulnerability entries from the attack trace.
