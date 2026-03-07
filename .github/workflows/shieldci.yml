@@ -31,6 +31,11 @@ jobs:
           fi
           echo "commit_msg=$(git log -1 --pretty=%s 2>/dev/null || echo 'scan')" >> "$GITHUB_OUTPUT"
 
+      - name: Build ShieldCI engine
+        run: |
+          cd "$HOME/Desktop/ShieldCI"
+          cargo build --release
+
       - name: Check ShieldCI engine is available
         run: |
           if [ ! -f "$HOME/Desktop/ShieldCI/target/release/shield-ci" ]; then
