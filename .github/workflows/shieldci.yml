@@ -1,8 +1,11 @@
 name: ShieldCI Security Scan
 
 on:
+  push:
+    branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
 
 jobs:
   shieldci-scan:
@@ -13,81 +16,79 @@ jobs:
       - name: Checkout target repository
         uses: actions/checkout@v4
 
-      - name: Get PR metadata
+      - name: Gather metadata
         id: meta
         run: |
           echo "repo=${{ github.repository }}" >> "$GITHUB_OUTPUT"
-          echo "branch=${{ github.head_ref }}" >> "$GITHUB_OUTPUT"
-          echo "commit=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
-          echo "commit_msg=$(git log -1 --pretty=%s 2>/dev/null || echo 'PR scan')" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "branch=${{ github.head_ref }}" >> "$GITHUB_OUTPUT"
+            echo "commit=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+            echo "trigger=PR" >> "$GITHUB_OUTPUT"
+          else
+            echo "branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "commit=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "trigger=${{ github.event_name }}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "commit_msg=$(git log -1 --pretty=%s 2>/dev/null || echo 'scan')" >> "$GITHUB_OUTPUT"
 
       - name: Check ShieldCI engine is available
         run: |
           if [ ! -f "$HOME/Desktop/ShieldCI/target/release/shield-ci" ]; then
-            echo "ERROR: ShieldCI engine not found at ~/Desktop/ShieldCI/target/release/shield-ci"
-            echo "Please build the engine first: cd ~/Desktop/ShieldCI && cargo build --release"
+            echo "ERROR: ShieldCI engine not found"
             exit 1
           fi
 
-      - name: Copy shieldci.yml to engine tests directory
+      - name: Copy shieldci.yml config
         run: |
           if [ -f "shieldci.yml" ]; then
             cp shieldci.yml "$HOME/Desktop/ShieldCI/tests/shieldci.yml"
-            echo "Copied shieldci.yml config"
-          else
-            echo "No shieldci.yml found in repo root, engine will auto-detect"
           fi
 
-      - name: Copy target repo to engine tests directory
+      - name: Copy target repo to engine
         run: |
           rm -rf "$HOME/Desktop/ShieldCI/tests/repo"
           cp -r "$GITHUB_WORKSPACE" "$HOME/Desktop/ShieldCI/tests/repo"
 
       - name: Run ShieldCI engine
         id: scan
-        working-directory: ${{ env.HOME }}/Desktop/ShieldCI/tests
         run: |
           START_TIME=$(date +%s)
           cd "$HOME/Desktop/ShieldCI/tests"
           "$HOME/Desktop/ShieldCI/target/release/shield-ci" 2>&1 | tee scan_output.log || true
           END_TIME=$(date +%s)
-          DURATION=$((END_TIME - START_TIME))
-          echo "duration=${DURATION}s" >> "$GITHUB_OUTPUT"
+          echo "duration=$((END_TIME - START_TIME))s" >> "$GITHUB_OUTPUT"
 
       - name: Push results to ShieldCI dashboard
         if: always()
         env:
-          SHIELDCI_API_URL: ${{ secrets.SHIELDCI_API_URL }}
-          SHIELDCI_API_KEY: ${{ secrets.SHIELDCI_API_KEY }}
+          SHIELDCI_API_URL: http://localhost:3000
+          SHIELDCI_API_KEY: fc09420a3737855a3094ff7831a6219565cee6777a0fbeec
           SHIELDCI_REPO: ${{ steps.meta.outputs.repo }}
           SHIELDCI_BRANCH: ${{ steps.meta.outputs.branch }}
           SHIELDCI_COMMIT: ${{ steps.meta.outputs.commit }}
           SHIELDCI_COMMIT_MSG: ${{ steps.meta.outputs.commit_msg }}
           SHIELDCI_DURATION: ${{ steps.scan.outputs.duration }}
-          SHIELDCI_TRIGGERED_BY: PR
-          SHIELDCI_RESULTS_FILE: ${{ env.HOME }}/Desktop/ShieldCI/tests/shield_results.json
+          SHIELDCI_TRIGGERED_BY: ${{ steps.meta.outputs.trigger }}
+          SHIELDCI_RESULTS_FILE: ${{ runner.temp }}/../../../Desktop/ShieldCI/tests/shield_results.json
         run: |
+          export SHIELDCI_RESULTS_FILE="$HOME/Desktop/ShieldCI/tests/shield_results.json"
           python3 "$HOME/Desktop/ShieldCI/push_results.py"
 
       - name: Post scan summary as PR comment
-        if: always()
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const reportPath = `${process.env.HOME}/Desktop/ShieldCI/tests/SHIELD_REPORT.md`;
+            const reportPath = process.env.HOME + '/Desktop/ShieldCI/tests/SHIELD_REPORT.md';
             let report = 'Scan completed but no report was generated.';
             try {
               report = fs.readFileSync(reportPath, 'utf8');
-              if (report.length > 60000) {
-                report = report.substring(0, 60000) + '\n\n... (truncated)';
-              }
-            } catch (e) {
-              report = 'Could not read scan report.';
-            }
+              if (report.length > 60000) report = report.substring(0, 60000) + '\n\n... (truncated)';
+            } catch (e) { report = 'Could not read scan report.'; }
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `## 🛡️ ShieldCI Security Scan Results\n\n${report}`
+              body: '## 🛡️ ShieldCI Security Scan Results\n\n' + report
             });

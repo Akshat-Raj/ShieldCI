@@ -1,0 +1,64 @@
+🛡️ Booting ShieldCI Orchestrator...
+📋 Loaded shieldci.yml configuration
+⚙️  Running build: npm install
+
+up to date, audited 192 packages in 685ms
+
+26 packages are looking for funding
+  run `npm fund` for details
+
+7 vulnerabilities (2 low, 5 high)
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+🚀 Launching Node.js server on http://127.0.0.1:3000...
+⏳ Waiting for target http://127.0.0.1:3000 to come online...
+✅ Target is up and responding!
+Recursively flattening codebase for full context...
+
+📋 Test Plan (5 tests):
+  1. [RECON: Port Scan] nmap_scan → http://host.docker.internal:3000
+  2. [RECON: Security Headers] check_headers → http://host.docker.internal:3000
+  3. [VULN SCAN: Web Server] nikto_scan → http://host.docker.internal:3000
+  4. [DISCOVERY: Hidden Paths] gobuster_scan → http://host.docker.internal:3000
+  5. [SQLi: GET /login] sqlmap_scan → http://host.docker.internal:3000/login?username=test
+
+--- Test 1/5: RECON: Port Scan ---
+🤝 Initiating MCP Handshake & Strike: nmap_scan on http://host.docker.internal:3000
+[03/07/26 02:07:37] INFO     Processing request of type            server.py:720
+                             CallToolRequest                                    
+
+--- Test 2/5: RECON: Security Headers ---
+🤝 Initiating MCP Handshake & Strike: check_headers on http://host.docker.internal:3000
+[03/07/26 02:07:38] INFO     Processing request of type            server.py:720
+                             CallToolRequest                                    
+
+--- Test 3/5: VULN SCAN: Web Server ---
+🤝 Initiating MCP Handshake & Strike: nikto_scan on http://host.docker.internal:3000
+[03/07/26 02:07:39] INFO     Processing request of type            server.py:720
+                             CallToolRequest                                    
+
+--- Test 4/5: DISCOVERY: Hidden Paths ---
+🤝 Initiating MCP Handshake & Strike: gobuster_scan on http://host.docker.internal:3000
+[03/07/26 02:07:53] INFO     Processing request of type            server.py:720
+                             CallToolRequest                                    
+
+--- Test 5/5: SQLi: GET /login ---
+🤝 Initiating MCP Handshake & Strike: sqlmap_scan on http://host.docker.internal:3000/login?username=test
+[03/07/26 02:07:54] INFO     Processing request of type            server.py:720
+                             CallToolRequest                                    
+
+--- Adaptive Strike 1 ---
+🧠 Invoking local model via Ollama API...
+🤝 Initiating MCP Handshake & Strike: sqlmap_scan on http://host.docker.internal:3000/login?username=admin
+[03/07/26 02:08:01] INFO     Processing request of type            server.py:720
+                             CallToolRequest                                    
+
+--- Adaptive Strike 2 ---
+🧠 Invoking local model via Ollama API...
+🤝 Initiating MCP Handshake & Strike: sqlmap_scan on http://host.docker.internal:3000/login?username=test
+[03/07/26 02:08:09] INFO     Processing request of type            server.py:720
+                             CallToolRequest                                    
+📝 Compiling final security assessment...
