@@ -1,8 +1,8 @@
 # ShieldCI Configuration
-# Place this file in your repo root to configure security scanning.
+# Intentionally vulnerable target app for testing security tools
 
 project:
-  name: "shieldci-target"
+  name: "shieldci-vuln-target"
   framework: "Node.js"
   language: "javascript"
 
@@ -21,15 +21,96 @@ endpoints:
     params:
       - name: "username"
         type: "string"
-        description: "User login name"
-    description: "User login endpoint - queries database"
+        description: "User login name — queries database directly"
+      - name: "password"
+        type: "string"
+        description: "User password — queries database directly"
+    description: "Login endpoint — raw SQL, vulnerable to SQLi"
+
+  - path: "/search"
+    method: "GET"
+    params:
+      - name: "q"
+        type: "string"
+        description: "Search query rendered into HTML response"
+    description: "Search page — reflected XSS, no output encoding"
+
+  - path: "/ping"
+    method: "GET"
+    params:
+      - name: "host"
+        type: "string"
+        description: "Hostname passed to OS ping command"
+    description: "Ping utility — OS command injection"
+
+  - path: "/file"
+    method: "GET"
+    params:
+      - name: "name"
+        type: "string"
+        description: "Filename to read from disk"
+    description: "File reader — path traversal / LFI"
+
+  - path: "/api/users/:id"
+    method: "GET"
+    params:
+      - name: "id"
+        type: "integer"
+        description: "User ID — no auth check (IDOR)"
+    description: "User profile — IDOR, leaks passwords"
+
+  - path: "/api/fetch"
+    method: "GET"
+    params:
+      - name: "url"
+        type: "string"
+        description: "URL to fetch server-side"
+    description: "Proxy endpoint — SSRF, no URL validation"
+
+  - path: "/redirect"
+    method: "GET"
+    params:
+      - name: "url"
+        type: "string"
+        description: "Target URL for redirect"
+    description: "Redirect — open redirect, no validation"
+
+  - path: "/debug"
+    method: "GET"
+    description: "Debug info — leaks env vars, credentials, secrets"
+
+  - path: "/api/users"
+    method: "POST"
+    params:
+      - name: "username"
+        type: "string"
+      - name: "password"
+        type: "string"
+      - name: "email"
+        type: "string"
+      - name: "role"
+        type: "string"
+        description: "User-controlled role field — mass assignment"
+    description: "User registration — mass assignment + SQLi in INSERT"
+
+  - path: "/api/search"
+    method: "GET"
+    params:
+      - name: "query"
+        type: "string"
+        description: "Search term — injected into LIKE clause"
+    description: "User search — SQL injection via LIKE"
+
+  - path: "/api/secrets"
+    method: "GET"
+    description: "Secrets endpoint — no auth, exposes API keys"
 
 database:
   type: "sqlite"
-  orm: false  # raw queries used
+  orm: false  # raw queries used everywhere
 
 auth:
-  enabled: false
+  enabled: false  # no authentication on any endpoint
 
 files:
   - "app.js"
