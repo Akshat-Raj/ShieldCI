@@ -1,0 +1,58 @@
+# ── Stage 1: Build the Rust binary ──────────────────────────
+FROM rust:1.77-bookworm AS builder
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src/ src/
+
+RUN cargo build --release
+
+# ── Stage 2: All-in-one runtime ─────────────────────────────
+# Kali Rolling provides the pentesting tool suite out of the box.
+FROM kalilinux/kali-rolling
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ── System packages ──
+#   • Security tools : sqlmap, nmap, nikto, gobuster, wpscan, dirb (wordlists)
+#   • Runtimes       : python3, nodejs, npm  (to build & launch target apps)
+#   • Utilities      : curl, jq, ca-certificates
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip \
+    sqlmap nmap nikto gobuster wpscan dirb curl jq \
+    ca-certificates \
+    nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Python dependencies (MCP SDK for tool bridge) ──
+RUN pip3 install "mcp[cli]" --break-system-packages
+
+WORKDIR /app
+
+# ── Copy the compiled Rust engine ──
+COPY --from=builder /build/target/release/shield-ci /app/shield-ci
+
+# ── Copy support files ──
+COPY kali_mcp.py        /app/kali_mcp.py
+COPY push_results.py    /app/push_results.py
+COPY run.sh             /app/run.sh
+COPY detector.sh        /app/detector.sh
+COPY tool_call.gbnf     /app/tool_call.gbnf
+COPY entrypoint_allinone.sh /app/entrypoint.sh
+
+RUN chmod +x /app/entrypoint.sh /app/shield-ci /app/run.sh /app/detector.sh
+
+# ── Directories ──
+RUN mkdir -p /app/tests
+
+# ── Environment ──
+#   SHIELDCI_LOCAL_TOOLS=1  → run Kali tools in-process (no Docker-in-Docker)
+#   OLLAMA_HOST             → point to an Ollama instance (host or remote)
+ENV SHIELDCI_LOCAL_TOOLS=1
+ENV OLLAMA_HOST=http://host.docker.internal:11434
+ENV SHIELDCI_RESULTS_FILE=/app/tests/shield_results.json
+
+VOLUME ["/app/tests"]
+WORKDIR /app/tests
+
+ENTRYPOINT ["/app/entrypoint.sh"]

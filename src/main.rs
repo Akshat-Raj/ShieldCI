@@ -236,6 +236,11 @@ fn flatten_codebase(dir: &str) -> String {
     full_code
 }
 
+fn ollama_url() -> String {
+    let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
+    format!("{}/api/generate", host.trim_end_matches('/'))
+}
+
 async fn ask_llm(system_prompt: &str) -> ToolCall {
     println!("Invoking ShieldCI LLM");
     let client = Client::new();
@@ -246,7 +251,7 @@ async fn ask_llm(system_prompt: &str) -> ToolCall {
         "format": "json"
     });
 
-    let res = client.post("http://localhost:11434/api/generate").json(&req_body).send().await.expect("Ollama error");
+    let res = client.post(&ollama_url()).json(&req_body).send().await.expect("Ollama error");
     let res_json: serde_json::Value = res.json().await.unwrap();
     let response_text = res_json["response"].as_str().unwrap_or("{}");
     
@@ -266,12 +271,21 @@ async fn ask_llm(system_prompt: &str) -> ToolCall {
 
 async fn execute_mcp_tool_stdio(tool_call: &ToolCall) -> Result<String, Box<dyn std::error::Error>> {
     println!("Initiating MCP Handshake & Strike: {}", tool_call.tool);
-    
-    let mut child = Command::new("docker")
-        .args(["run", "-i", "--rm", "shieldci-kali-image"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()?;
+
+    let local_tools = std::env::var("SHIELDCI_LOCAL_TOOLS").unwrap_or_default() == "1";
+    let mut child = if local_tools {
+        Command::new("python3")
+            .arg("/app/kali_mcp.py")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?
+    } else {
+        Command::new("docker")
+            .args(["run", "-i", "--rm", "shieldci-kali-image"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?
+    };
 
     let mut stdin = child.stdin.take().expect("Failed to open stdin");
     let stdout = child.stdout.take().expect("Failed to open stdout");
@@ -284,7 +298,12 @@ async fn execute_mcp_tool_stdio(tool_call: &ToolCall) -> Result<String, Box<dyn 
     reader.read_line(&mut line)?;
 
     // Step 2: Call Tool — nmap_scan uses "target" param, others use "url"
-    let target_url = tool_call.target.replace("127.0.0.1", "host.docker.internal");
+    let local_mode = std::env::var("SHIELDCI_LOCAL_TOOLS").unwrap_or_default() == "1";
+    let target_url = if local_mode {
+        tool_call.target.clone()
+    } else {
+        tool_call.target.replace("127.0.0.1", "host.docker.internal")
+    };
     let mcp_args = if tool_call.tool == "nmap_scan" {
         serde_json::json!({ "target": target_url })
     } else {
@@ -366,7 +385,7 @@ IMPORTANT: You MUST include actual code snippets from the source code showing vu
     );
 
     let req_body = serde_json::json!({"model": "llama3.1", "prompt": prompt, "stream": false});
-    let res = client.post("http://localhost:11434/api/generate").json(&req_body).send().await.expect("Ollama error");
+    let res = client.post(&ollama_url()).json(&req_body).send().await.expect("Ollama error");
     let res_json: serde_json::Value = res.json().await.unwrap();
     res_json["response"].as_str().unwrap_or("Report failed.").to_string()
 }
@@ -454,7 +473,12 @@ async fn main() {
     let _ = wait_for_target(&config.target_url, 15).await;
 
     let codebase = flatten_codebase(".");
-    let docker_url = config.target_url.replace("127.0.0.1", "host.docker.internal");
+    let is_local = std::env::var("SHIELDCI_LOCAL_TOOLS").unwrap_or_default() == "1";
+    let docker_url = if is_local {
+        config.target_url.clone()
+    } else {
+        config.target_url.replace("127.0.0.1", "host.docker.internal")
+    };
 
     // ── Generate dynamic test plan ──
     let test_plan = generate_test_plan(&shield_config, &docker_url);

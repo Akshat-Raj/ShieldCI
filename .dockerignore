@@ -1,6 +1,11 @@
 target/
 .git/
-tests/
+tests/repo/
+tests/node_modules/
+tests/scan_output.log
+tests/shield_results.json
+tests/SHIELD_REPORT.md
+tests/package-lock.json
 *.md
-SHIELD_REPORT.md
+!README.md
 temp_prompt.txt
