@@ -31,53 +31,51 @@ jobs:
           fi
           echo "commit_msg=$(git log -1 --pretty=%s 2>/dev/null || echo 'scan')" >> "$GITHUB_OUTPUT"
 
-      - name: Build ShieldCI engine
+      - name: Build ShieldCI engine from checked-out source
         run: |
-          cd "$HOME/Desktop/ShieldCI"
+          cd "$GITHUB_WORKSPACE"
           cargo build --release
 
       - name: Check ShieldCI engine is available
         run: |
-          if [ ! -f "$HOME/Desktop/ShieldCI/target/release/shield-ci" ]; then
-            echo "ERROR: ShieldCI engine not found"
+          if [ ! -f "$GITHUB_WORKSPACE/target/release/shield-ci" ]; then
+            echo "ERROR: ShieldCI engine not found after build"
             exit 1
           fi
 
-      - name: Copy shieldci.yml config
+      - name: Build Kali Docker image
         run: |
-          if [ -f "shieldci.yml" ]; then
-            cp shieldci.yml "$HOME/Desktop/ShieldCI/tests/shieldci.yml"
-          fi
+          cd "$GITHUB_WORKSPACE"
+          docker build -t shieldci-kali-image .
 
-      - name: Copy target repo to engine
+      - name: Install test app dependencies
         run: |
-          rm -rf "$HOME/Desktop/ShieldCI/tests/repo"
-          cp -r "$GITHUB_WORKSPACE" "$HOME/Desktop/ShieldCI/tests/repo"
+          cd "$GITHUB_WORKSPACE/tests"
+          npm install
 
       - name: Run ShieldCI engine
         id: scan
         run: |
           START_TIME=$(date +%s)
-          cd "$HOME/Desktop/ShieldCI/tests"
-          "$HOME/Desktop/ShieldCI/target/release/shield-ci" 2>&1 | tee scan_output.log || true
+          cd "$GITHUB_WORKSPACE/tests"
+          "$GITHUB_WORKSPACE/target/release/shield-ci" 2>&1 | tee scan_output.log || true
           END_TIME=$(date +%s)
           echo "duration=$((END_TIME - START_TIME))s" >> "$GITHUB_OUTPUT"
 
       - name: Push results to ShieldCI dashboard
         if: always()
         env:
-          SHIELDCI_API_URL: http://localhost:3000
-          SHIELDCI_API_KEY: fc09420a3737855a3094ff7831a6219565cee6777a0fbeec
+          SHIELDCI_API_URL: ${{ secrets.SHIELDCI_API_URL }}
+          SHIELDCI_API_KEY: ${{ secrets.SHIELDCI_API_KEY }}
           SHIELDCI_REPO: ${{ steps.meta.outputs.repo }}
           SHIELDCI_BRANCH: ${{ steps.meta.outputs.branch }}
           SHIELDCI_COMMIT: ${{ steps.meta.outputs.commit }}
           SHIELDCI_COMMIT_MSG: ${{ steps.meta.outputs.commit_msg }}
           SHIELDCI_DURATION: ${{ steps.scan.outputs.duration }}
           SHIELDCI_TRIGGERED_BY: ${{ steps.meta.outputs.trigger }}
-          SHIELDCI_RESULTS_FILE: ${{ runner.temp }}/../../../Desktop/ShieldCI/tests/shield_results.json
+          SHIELDCI_RESULTS_FILE: ${{ github.workspace }}/tests/shield_results.json
         run: |
-          export SHIELDCI_RESULTS_FILE="$HOME/Desktop/ShieldCI/tests/shield_results.json"
-          python3 "$HOME/Desktop/ShieldCI/push_results.py"
+          python3 "$GITHUB_WORKSPACE/push_results.py"
 
       - name: Post scan summary as PR comment
         if: github.event_name == 'pull_request'
@@ -85,7 +83,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const reportPath = process.env.HOME + '/Desktop/ShieldCI/tests/SHIELD_REPORT.md';
+            const reportPath = process.env.GITHUB_WORKSPACE + '/tests/SHIELD_REPORT.md';
             let report = 'Scan completed but no report was generated.';
             try {
               report = fs.readFileSync(reportPath, 'utf8');
