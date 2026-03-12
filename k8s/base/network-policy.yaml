@@ -1,0 +1,145 @@
+# ── Control Plane Network Policy ──
+# Restricts traffic within the control plane namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: control-plane-default-deny
+  namespace: shieldci-control-plane
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    # Allow DNS
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Dispatcher: can reach Redis, results-collector, and external K8s API
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dispatcher
+  namespace: shieldci-control-plane
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: dispatcher
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # GitHub App connects to dispatcher API
+    - ports:
+        - port: 3002
+  egress:
+    - to: []
+      ports:
+        # DNS
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+        # Redis
+        - protocol: TCP
+          port: 6379
+        # Results collector HTTP
+        - protocol: TCP
+          port: 8080
+        # K8s API server
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+---
+# Results collector: reachable from scan engine pods and dispatcher
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-results-collector
+  namespace: shieldci-control-plane
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: results-collector
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: 8080
+        - port: 8443
+  egress:
+    - to: []
+      ports:
+        # DNS
+        - protocol: UDP
+          port: 53
+        # PostgreSQL
+        - protocol: TCP
+          port: 5432
+---
+# Redis: only dispatcher can connect
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis
+  namespace: shieldci-control-plane
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: dispatcher
+      ports:
+        - port: 6379
+---
+# PostgreSQL: only results-collector can connect
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgresql
+  namespace: shieldci-control-plane
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: results-collector
+      ports:
+        - port: 5432
+---
+# Ollama: only engine pods in scan-* namespaces can connect
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ollama
+  namespace: shieldci-control-plane
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ollama
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              shieldci.io/type: scan
+      ports:
+        - port: 11434

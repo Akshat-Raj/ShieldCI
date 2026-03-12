@@ -1,0 +1,17 @@
+# ── Per-scan ephemeral namespace ──
+# Created by Job Dispatcher, deleted by TTL controller after scan completes.
+# Placeholders ({{...}}) are substituted at runtime by the dispatcher.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: "scan-{{SCAN_ID}}"
+  labels:
+    app.kubernetes.io/managed-by: shieldci
+    shieldci.io/scan-id: "{{SCAN_ID}}"
+    shieldci.io/tenant-id: "{{TENANT_ID}}"
+    shieldci.io/repo: "{{REPO_FULL_NAME}}"
+    shieldci.io/type: scan
+  annotations:
+    shieldci.io/created-at: "{{CREATED_AT}}"
+    shieldci.io/ttl: "{{TTL_SECONDS}}"
+    shieldci.io/sha: "{{COMMIT_SHA}}"

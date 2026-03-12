@@ -1,0 +1,12 @@
+# ── ShieldCI Control Plane Namespace ──
+# All control-plane services live here, isolated from ephemeral scan namespaces.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shieldci-control-plane
+  labels:
+    app.kubernetes.io/part-of: shieldci
+    app.kubernetes.io/managed-by: shieldci
+    shieldci.io/component: control-plane
+    # Required by NetworkPolicy namespaceSelector in scan/build namespaces
+    name: shieldci-control-plane

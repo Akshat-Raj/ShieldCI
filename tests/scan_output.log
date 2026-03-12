@@ -1,8 +1,8 @@
 🛡️ Booting ShieldCI Orchestrator...
-📋 Loaded shieldci.yml configuration
-⚙️  Running build: npm install
+Loaded shieldci.yml configuration
+Running build: npm install
 
-up to date, audited 192 packages in 885ms
+up to date, audited 192 packages in 2s
 
 26 packages are looking for funding
   run `npm fund` for details
@@ -13,59 +13,129 @@ To address all issues (including breaking changes), run:
   npm audit fix --force
 
 Run `npm audit` for details.
-🚀 Launching Node.js server on http://127.0.0.1:3000...
-⏳ Waiting for target http://127.0.0.1:3000 to come online...
-✅ Target is up and responding!
+Launching Node.js server
+Waiting for target to come online
+Target is up and responding
 Recursively flattening codebase for full context...
 
-📋 Test Plan (5 tests):
+Test Plan (5 tests):
   1. [RECON: Port Scan] nmap_scan → http://host.docker.internal:3000
   2. [RECON: Security Headers] check_headers → http://host.docker.internal:3000
   3. [VULN SCAN: Web Server] nikto_scan → http://host.docker.internal:3000
   4. [DISCOVERY: Hidden Paths] gobuster_scan → http://host.docker.internal:3000
   5. [SQLi: GET /login] sqlmap_scan → http://host.docker.internal:3000/login?username=test
 
---- Test 1/5: RECON: Port Scan ---
-🤝 Initiating MCP Handshake & Strike: nmap_scan on http://host.docker.internal:3000
-[03/07/26 02:41:09] INFO     Processing request of type            server.py:720
-                             CallToolRequest                                    
+Test 1/5: RECON: Port Scan
+Initiating MCP Handshake & Strike: nmap_scan
+Cannot connect to the Docker daemon at unix:///home/zenith1415/.docker/desktop/docker.sock. Is the docker daemon running?
 
---- Test 2/5: RECON: Security Headers ---
-🤝 Initiating MCP Handshake & Strike: check_headers on http://host.docker.internal:3000
-[03/07/26 02:41:10] INFO     Processing request of type            server.py:720
-                             CallToolRequest                                    
+Test 2/5: RECON: Security Headers
+Initiating MCP Handshake & Strike: check_headers
+Cannot connect to the Docker daemon at unix:///home/zenith1415/.docker/desktop/docker.sock. Is the docker daemon running?
 
---- Test 3/5: VULN SCAN: Web Server ---
-🤝 Initiating MCP Handshake & Strike: nikto_scan on http://host.docker.internal:3000
-[03/07/26 02:41:10] INFO     Processing request of type            server.py:720
-                             CallToolRequest                                    
+Test 3/5: VULN SCAN: Web Server
+Initiating MCP Handshake & Strike: nikto_scan
+Cannot connect to the Docker daemon at unix:///home/zenith1415/.docker/desktop/docker.sock. Is the docker daemon running?
 
---- Test 4/5: DISCOVERY: Hidden Paths ---
-🤝 Initiating MCP Handshake & Strike: gobuster_scan on http://host.docker.internal:3000
-[03/07/26 02:42:23] INFO     Processing request of type            server.py:720
-                             CallToolRequest                                    
+Test 4/5: DISCOVERY: Hidden Paths
+Initiating MCP Handshake & Strike: gobuster_scan
+Cannot connect to the Docker daemon at unix:///home/zenith1415/.docker/desktop/docker.sock. Is the docker daemon running?
 
---- Test 5/5: SQLi: GET /login ---
-🤝 Initiating MCP Handshake & Strike: sqlmap_scan on http://host.docker.internal:3000/login?username=test
-[03/07/26 02:42:24] INFO     Processing request of type            server.py:720
-                             CallToolRequest                                    
+Test 5/5: SQLi: GET /login
+Initiating MCP Handshake & Strike: sqlmap_scan
+Cannot connect to the Docker daemon at unix:///home/zenith1415/.docker/desktop/docker.sock. Is the docker daemon running?
 
 --- Adaptive Strike 1 ---
-🧠 Invoking local model via Ollama API...
-🤝 Initiating MCP Handshake & Strike: sqlmap_scan on http://host.docker.internal:3000/login?username=admin&password=admin
-[03/07/26 02:42:35] INFO     Processing request of type            server.py:720
-                             CallToolRequest                                    
+Invoking ShieldCI LLM
+Initiating MCP Handshake & Strike: sqlmap_scan
+Cannot connect to the Docker daemon at unix:///home/zenith1415/.docker/desktop/docker.sock. Is the docker daemon running?
 
 --- Adaptive Strike 2 ---
-🧠 Invoking local model via Ollama API...
-🤝 Initiating MCP Handshake & Strike: sqlmap_scan on http://host.docker.internal:3000/login?username=test
-[03/07/26 02:42:51] INFO     Processing request of type            server.py:720
-                             CallToolRequest                                    
-📝 Compiling final security assessment...
+Invoking ShieldCI LLM
+Initiating MCP Handshake & Strike: gobuster_scan
+Cannot connect to the Docker daemon at unix:///home/zenith1415/.docker/desktop/docker.sock. Is the docker daemon running?
+Compiling final security assessment
 
 --- FINAL REPORT ---
-I'm ready to help you review the provided code snippets. Please go ahead and provide the first snippet you'd like me to analyze. I'll identify any potential vulnerabilities and suggest corrections. 
+Based on the provided code snippets, I have identified several vulnerabilities and areas for improvement. Here are the findings:
 
-(Note: I'll only review the provided code snippets and not the entire project. Please make sure to include relevant code sections for each vulnerability you'd like me to identify.)
-✅ Saved to SHIELD_REPORT.md
-✅ Saved structured results to shield_results.json
+1. **SQL Injection Vulnerability**:
+
+In the `/login` route, the code uses a vulnerable approach to construct the SQL query:
+```javascript
+const query = "SELECT * FROM users WHERE username = '" + user + "'";
+```
+This allows an attacker to inject malicious SQL code by manipulating the `user` parameter. To fix this, use a parameterized query or an ORM like Sequelize.
+
+**Corrected Version**:
+```javascript
+const query = "SELECT * FROM users WHERE username = ?";
+db.get(query, [user], (err, row) => { ... });
+```
+2. **Insecure Direct Object Reference (IDOR)**:
+
+In the `/login` route, the code retrieves user data without proper authorization checks. This allows an attacker to access sensitive user information.
+```javascript
+db.get(query, (err, row) => {
+  if (row) res.send(`Welcome ${row.username}!`);
+  else res.status(401).send("Invalid");
+});
+```
+**Corrected Version**:
+```javascript
+const user = req.query.username || '';
+const query = "SELECT * FROM users WHERE username = ? AND role = 'administrator'";
+db.get(query, [user], (err, row) => {
+  if (row && row.role === 'administrator') res.send(`Welcome ${row.username}!`);
+  else res.status(401).send("Invalid");
+});
+```
+3. **Sensitive Data Exposure**:
+
+In the `/login` route, the code exposes sensitive user information (e.g., username) to the client.
+```javascript
+res.send(`Welcome ${row.username}!`);
+```
+**Corrected Version**:
+```javascript
+res.send("Login successful!");
+```
+4. **Insufficient Validation and Sanitization**:
+
+In the `/login` route, the code does not validate or sanitize user input, which can lead to vulnerabilities like SQL injection or cross-site scripting (XSS).
+```javascript
+const user = req.query.username || '';
+```
+**Corrected Version**:
+```javascript
+const user = req.query.username || '';
+const trimmedUser = user.trim();
+if (trimmedUser.length === 0) {
+  res.status(400).send("Invalid username");
+} else {
+  // ...
+}
+```
+5. **Insecure Error Handling**:
+
+In the `/login` route, the code does not handle errors properly, which can reveal sensitive information to attackers.
+```javascript
+db.get(query, (err, row) => {
+  if (err) console.error(err);
+  // ...
+});
+```
+**Corrected Version**:
+```javascript
+db.get(query, (err, row) => {
+  if (err) {
+    console.error(err);
+    res.status(500).send("Internal Server Error");
+  } else {
+    // ...
+  }
+});
+```
+These are just a few examples of vulnerabilities and areas for improvement in the provided code. It is essential to address these issues to ensure the security and integrity of the application.
+ Saved to SHIELD_REPORT.md
+Saved structured results to shield_results.json

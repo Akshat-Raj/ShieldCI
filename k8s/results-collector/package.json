@@ -1,0 +1,13 @@
+{
+  "name": "shieldci-results-collector",
+  "version": "0.1.0",
+  "description": "Receives scan results from engine pods over mTLS, encrypts, and stores",
+  "main": "src/index.js",
+  "scripts": { "start": "node src/index.js" },
+  "dependencies": {
+    "express": "^4.18.0",
+    "pino": "^8.16.0",
+    "pg": "^8.11.0",
+    "dotenv": "^16.3.0"
+  }
+}

@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ttl-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: ttl-controller
+    app.kubernetes.io/part-of: shieldci
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ttl-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ttl-controller
+    spec:
+      serviceAccountName: shieldci-ttl-controller
+      containers:
+        - name: ttl-controller
+          image: {{ .Values.ttlController.image }}
+          env:
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel }}
+          resources:
+            {{- toYaml .Values.ttlController.resources | nindent 12 }}

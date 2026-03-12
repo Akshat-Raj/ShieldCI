@@ -30,6 +30,27 @@ database:
 
 auth:
   enabled: false
+  # token: "Bearer eyJ..."       # JWT/Bearer token for authenticated scanning
+  # cookie: "session=abc123"     # Session cookie
+  # api_key: "sk-..."           # API key
+  # header_name: "Authorization" # Custom auth header name
+
+# Static analysis (SAST) — scans source code for vulnerabilities
+sast:
+  enabled: true
+  config: "auto"  # Options: "auto", "p/owasp-top-ten", "p/security-audit"
+
+# Dependency scanning (SCA) — finds vulnerable packages
+sca:
+  enabled: true
+
+# Scope enforcement (required for cloud-tier scanning)
+scope:
+  allowed_targets:
+    - "localhost"
+    - "127.0.0.1"
+    # - "*.yourdomain.com"      # Wildcard domain
+  authorization_proof: "none"    # Options: "none" (local only), "dns", "file"
 
 files:
   - "app.js"

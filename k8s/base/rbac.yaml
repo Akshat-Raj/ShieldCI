@@ -1,0 +1,72 @@
+# ── RBAC for ShieldCI Control Plane Services ──
+
+# Dispatcher needs to create/delete namespaces, pods, services, etc.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shieldci-dispatcher
+  namespace: shieldci-control-plane
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shieldci-dispatcher
+  labels:
+    app.kubernetes.io/part-of: shieldci
+rules:
+  # Namespace lifecycle for scan-* and build-* namespaces
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "get", "list", "delete"]
+  # Pod + Service management inside scan namespaces
+  - apiGroups: [""]
+    resources: ["pods", "services", "serviceaccounts", "secrets", "resourcequotas", "limitranges"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  # Network policies for scan isolation
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: shieldci-dispatcher
+subjects:
+  - kind: ServiceAccount
+    name: shieldci-dispatcher
+    namespace: shieldci-control-plane
+roleRef:
+  kind: ClusterRole
+  name: shieldci-dispatcher
+  apiGroup: rbac.authorization.k8s.io
+---
+# TTL controller needs to list/delete namespaces
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shieldci-ttl-controller
+  namespace: shieldci-control-plane
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shieldci-ttl-controller
+  labels:
+    app.kubernetes.io/part-of: shieldci
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: shieldci-ttl-controller
+subjects:
+  - kind: ServiceAccount
+    name: shieldci-ttl-controller
+    namespace: shieldci-control-plane
+roleRef:
+  kind: ClusterRole
+  name: shieldci-ttl-controller
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,72 @@
+# ── Network Policy: Zero-trust scan isolation ──
+# Engine pod can only reach: target pod, results collector (mTLS), and DNS.
+# Target pod can only receive traffic from engine pod.
+# ALL other egress (internet, other namespaces, cloud metadata) is BLOCKED.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: scan-isolation
+  namespace: "scan-{{SCAN_ID}}"
+  labels:
+    shieldci.io/scan-id: "{{SCAN_ID}}"
+spec:
+  podSelector: {}  # Applies to ALL pods in this namespace
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Target app: only accept traffic FROM engine pod
+    - from:
+        - podSelector:
+            matchLabels:
+              shieldci.io/role: engine
+  egress:
+    # Engine → Target app (intra-namespace only)
+    - to:
+        - podSelector:
+            matchLabels:
+              shieldci.io/role: target
+    # Engine → Results collector in control plane (push findings over mTLS)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              shieldci.io/component: control-plane
+          podSelector:
+            matchLabels:
+              shieldci.io/component: results-collector
+      ports:
+        - port: 8443
+          protocol: TCP
+    # Engine → Ollama LLM service in control plane
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              shieldci.io/component: control-plane
+          podSelector:
+            matchLabels:
+              shieldci.io/component: ollama
+      ports:
+        - port: 11434
+          protocol: TCP
+    # DNS resolution (CoreDNS) — required for service discovery
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # EVERYTHING ELSE IS DENIED BY DEFAULT
+---
+# ── Explicit deny-all baseline (defense in depth) ──
+# If Cilium or Calico isn't enforcing the above, this catches it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-external-egress
+  namespace: "scan-{{SCAN_ID}}"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress: []
+  # This is overridden by the scan-isolation policy above (k8s NetworkPolicy is additive).
+  # It exists as documentation and for CNI plugins that evaluate in order.

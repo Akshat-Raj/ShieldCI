@@ -1,14 +1,6 @@
-# ── Stage 1: Build the Rust binary ──────────────────────────
-FROM rust:1.77-bookworm AS builder
-
-WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
-COPY src/ src/
-
-RUN cargo build --release
-
-# ── Stage 2: All-in-one runtime ─────────────────────────────
-# Kali Rolling provides the pentesting tool suite out of the box.
+# ── All-in-one ShieldCI image ────────────────────────────────
+# Pre-built binary approach: run `cargo build --release` on host first,
+# then this Dockerfile packages everything into a single container.
 FROM kalilinux/kali-rolling
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -19,18 +11,27 @@ ENV DEBIAN_FRONTEND=noninteractive
 #   • Utilities      : curl, jq, ca-certificates
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip \
-    sqlmap nmap nikto gobuster wpscan dirb curl jq \
+    sqlmap nmap nikto gobuster wpscan dirb curl jq wget unzip \
     ca-certificates \
     nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Python dependencies (MCP SDK for tool bridge) ──
-RUN pip3 install "mcp[cli]" --break-system-packages
+# ── Nuclei (ProjectDiscovery) — 8000+ vulnerability templates ──
+RUN wget -qO /tmp/nuclei.zip https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_$(uname -s)_$(uname -m | sed 's/x86_64/amd64/').zip \
+    && unzip -o /tmp/nuclei.zip -d /usr/local/bin/ \
+    && rm /tmp/nuclei.zip \
+    && nuclei -update-templates 2>/dev/null || true
+
+# ── Trivy (SCA — dependency vulnerability scanning) ──
+RUN wget -qO- https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+# ── Python dependencies (MCP SDK, Semgrep SAST) ──
+RUN pip3 install "mcp[cli]" semgrep --break-system-packages
 
 WORKDIR /app
 
-# ── Copy the compiled Rust engine ──
-COPY --from=builder /build/target/release/shield-ci /app/shield-ci
+# ── Copy the pre-built Rust engine (built on host with `cargo build --release`) ──
+COPY target/release/shield-ci /app/shield-ci
 
 # ── Copy support files ──
 COPY kali_mcp.py        /app/kali_mcp.py

@@ -1,0 +1,87 @@
+# ── ShieldCI Engine — Kubernetes variant ──
+# Runs inside gVisor-sandboxed pods as non-root user 10001.
+# No Docker socket — tools are installed directly in the image.
+
+# ── Stage 1: Build the Rust binary ──
+FROM rust:1.82-bookworm AS builder
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src/ src/
+
+RUN cargo build --release
+
+# ── Stage 2: Kali tool layer (cached separately) ──
+FROM kalilinux/kali-rolling AS tools
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nmap \
+    nikto \
+    gobuster \
+    sqlmap \
+    curl \
+    python3 \
+    python3-pip \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install nuclei
+RUN curl -sSL https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_$(curl -s https://api.github.com/repos/projectdiscovery/nuclei/releases/latest | grep tag_name | cut -d '"' -f 4 | tr -d 'v')_linux_amd64.zip -o /tmp/nuclei.zip \
+    && cd /tmp && unzip -o nuclei.zip && mv nuclei /usr/local/bin/ && rm nuclei.zip || true
+
+# Install trivy
+RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin || true
+
+# Install semgrep
+RUN pip3 install --break-system-packages semgrep 2>/dev/null || pip3 install semgrep || true
+
+# ── Stage 3: Minimal runtime ──
+FROM debian:bookworm-slim
+
+# Install only runtime dependencies (no docker.io)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    python3 \
+    python3-pip \
+    curl \
+    git \
+    nmap \
+    libpcap0.8 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user matching gVisor pod spec
+RUN groupadd -g 10001 shieldci && \
+    useradd -u 10001 -g shieldci -d /app -s /bin/sh shieldci
+
+WORKDIR /app
+
+# Copy Rust binary
+COPY --from=builder /build/target/release/shield-ci /app/shield-ci
+
+# Copy tools from Kali layer
+COPY --from=tools /usr/bin/nikto /usr/bin/nikto
+COPY --from=tools /usr/bin/gobuster /usr/bin/gobuster
+COPY --from=tools /usr/share/sqlmap /usr/share/sqlmap
+COPY --from=tools /usr/bin/sqlmap /usr/bin/sqlmap
+COPY --from=tools /usr/local/bin/nuclei /usr/local/bin/nuclei
+COPY --from=tools /usr/local/bin/trivy /usr/local/bin/trivy
+
+# Copy support files
+COPY push_results.py /app/push_results.py
+COPY kali_mcp.py /app/kali_mcp.py
+COPY run.sh /app/run.sh
+COPY detector.sh /app/detector.sh
+COPY tool_call.gbnf /app/tool_call.gbnf
+
+# Create writable directories for read-only root filesystem
+RUN mkdir -p /app/tests /results /tmp/.shieldci && \
+    chown -R 10001:10001 /app /results /tmp/.shieldci
+
+ENV OLLAMA_HOST=http://ollama.shieldci-control-plane.svc.cluster.local:11434
+ENV SHIELDCI_LOCAL_TOOLS=1
+ENV SHIELDCI_RESULTS_FILE=/results/shield_results.json
+ENV HOME=/tmp/.shieldci
+
+USER 10001
+
+ENTRYPOINT ["/app/shield-ci"]

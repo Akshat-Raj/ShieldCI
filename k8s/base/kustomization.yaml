@@ -1,0 +1,33 @@
+# ── Deploy all control plane resources ──
+# Apply with: kubectl apply -k k8s/base/
+#
+# Manual order (if not using Kustomize):
+#   kubectl apply -f k8s/base/namespace.yaml
+#   kubectl apply -f k8s/base/secrets.yaml
+#   kubectl apply -f k8s/base/rbac.yaml
+#   kubectl apply -f k8s/base/network-policy.yaml
+#   kubectl apply -f k8s/base/redis.yaml
+#   kubectl apply -f k8s/base/postgresql.yaml
+#   kubectl apply -f k8s/base/registry.yaml
+#   kubectl apply -f k8s/base/ollama.yaml
+#   kubectl apply -f k8s/base/results-collector.yaml
+#   kubectl apply -f k8s/base/dispatcher.yaml
+#   kubectl apply -f k8s/base/ttl-controller.yaml
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: shieldci-control-plane
+
+resources:
+  - namespace.yaml
+  - secrets.yaml
+  - rbac.yaml
+  - network-policy.yaml
+  - redis.yaml
+  - postgresql.yaml
+  - registry.yaml
+  - ollama.yaml
+  - results-collector.yaml
+  - dispatcher.yaml
+  - ttl-controller.yaml

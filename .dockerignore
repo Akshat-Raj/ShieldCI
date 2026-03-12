@@ -1,4 +1,5 @@
 target/
+!target/release/shield-ci
 .git/
 tests/repo/
 tests/node_modules/
