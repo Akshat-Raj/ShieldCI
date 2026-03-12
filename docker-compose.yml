@@ -1,53 +1,27 @@
-version: "3.8"
+# ════════════════════════════════════════════════════════════
+#  ShieldCI — Docker Compose
+#  Run with: docker compose up --build
+#
+#  This scans the included tests/ vulnerable app by default.
+#  To scan YOUR repo, change the volume mount:
+#    volumes:
+#      - /path/to/your/repo:/workspace
+# ════════════════════════════════════════════════════════════
 
 services:
-  # ── Kali Arsenal (pentesting tools via MCP) ───────────────
-  # Built once, spawned on-demand by the engine via `docker run`
-  kali:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: shieldci-kali-image
-    profiles:
-      - build-only
-
-  # ── ShieldCI Engine (Rust orchestrator) ────────────────────
-  engine:
-    build:
-      context: .
-      dockerfile: Dockerfile.engine
-    image: shieldci-engine
-    depends_on:
-      kali:
-        condition: service_started
-    volumes:
-      # Mount Docker socket so the engine can spawn Kali containers
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Mount tests directory for scan results and target repo
-      - ./tests:/app/tests
-    environment:
-      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
-      - SHIELDCI_API_URL=${SHIELDCI_API_URL:-}
-      - SHIELDCI_API_KEY=${SHIELDCI_API_KEY:-}
-      - SHIELDCI_RESULTS_FILE=/app/tests/shield_results.json
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    working_dir: /app/tests
-
-  # ── All-in-One (single container, no Docker-in-Docker) ────
-  allinone:
+  shieldci:
     build:
       context: .
       dockerfile: Dockerfile.allinone
-    image: shieldci:latest
-    volumes:
-      - ./tests:/app/tests
+    container_name: shieldci
     environment:
-      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
-      - SHIELDCI_API_URL=${SHIELDCI_API_URL:-}
-      - SHIELDCI_API_KEY=${SHIELDCI_API_KEY:-}
-      - SHIELDCI_RESULTS_FILE=/app/tests/shield_results.json
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - SHIELDCI_LOCAL_TOOLS=1
+      - SHIELDCI_MCP_CMD=python3 /app/kali_mcp.py
+    volumes:
+      # Default: scan the included vulnerable test app
+      - ./tests:/workspace
+      # Output: reports written back to your host
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    profiles:
-      - allinone
+    network_mode: host

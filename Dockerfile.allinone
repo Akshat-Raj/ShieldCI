@@ -1,59 +1,68 @@
-# ── All-in-one ShieldCI image ────────────────────────────────
-# Pre-built binary approach: run `cargo build --release` on host first,
-# then this Dockerfile packages everything into a single container.
+# ════════════════════════════════════════════════════════════
+#  ShieldCI — All-in-One Container
+#  One image, one command. Contains:
+#    • Rust orchestrator (shield-ci binary)
+#    • Kali security tools (sqlmap, nmap, nikto, gobuster)
+#    • Python MCP server (kali_mcp.py)
+#    • Node.js runtime (for test target apps)
+#
+#  Usage:
+#    docker build -f Dockerfile.allinone -t shieldci .
+#    docker run --rm -v /path/to/target-repo:/workspace \
+#      -e OLLAMA_HOST=http://host.docker.internal:11434 \
+#      shieldci
+# ════════════════════════════════════════════════════════════
+
+# ── Stage 1: Build the Rust binary ─────────────────────────
+FROM rust:1.77-bookworm AS builder
+WORKDIR /build
+COPY Cargo.toml Cargo.lock* ./
+COPY src/ src/
+RUN cargo build --release
+
+# ── Stage 2: All-in-one runtime on Kali ────────────────────
 FROM kalilinux/kali-rolling
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ── System packages ──
-#   • Security tools : sqlmap, nmap, nikto, gobuster, wpscan, dirb (wordlists)
-#   • Runtimes       : python3, nodejs, npm  (to build & launch target apps)
-#   • Utilities      : curl, jq, ca-certificates
+# Security tools + runtimes
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    sqlmap nmap nikto gobuster curl ca-certificates \
     python3 python3-pip \
-    sqlmap nmap nikto gobuster wpscan dirb curl jq wget unzip \
-    ca-certificates \
     nodejs npm \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Nuclei (ProjectDiscovery) — 8000+ vulnerability templates ──
-RUN wget -qO /tmp/nuclei.zip https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_$(uname -s)_$(uname -m | sed 's/x86_64/amd64/').zip \
-    && unzip -o /tmp/nuclei.zip -d /usr/local/bin/ \
-    && rm /tmp/nuclei.zip \
-    && nuclei -update-templates 2>/dev/null || true
-
-# ── Trivy (SCA — dependency vulnerability scanning) ──
-RUN wget -qO- https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-
-# ── Python dependencies (MCP SDK, Semgrep SAST) ──
-RUN pip3 install "mcp[cli]" semgrep --break-system-packages
+# Python MCP SDK
+RUN pip3 install "mcp[cli]" --break-system-packages
 
 WORKDIR /app
 
-# ── Copy the pre-built Rust engine (built on host with `cargo build --release`) ──
-COPY target/release/shield-ci /app/shield-ci
+# Compiled Rust orchestrator
+COPY --from=builder /build/target/release/shield-ci /app/shield-ci
+RUN chmod +x /app/shield-ci
 
-# ── Copy support files ──
+# Support files
 COPY kali_mcp.py        /app/kali_mcp.py
 COPY push_results.py    /app/push_results.py
 COPY run.sh             /app/run.sh
 COPY detector.sh        /app/detector.sh
 COPY tool_call.gbnf     /app/tool_call.gbnf
-COPY entrypoint_allinone.sh /app/entrypoint.sh
 
-RUN chmod +x /app/entrypoint.sh /app/shield-ci /app/run.sh /app/detector.sh
+# Entrypoint
+COPY entrypoint_allinone.sh /app/entrypoint_allinone.sh
+RUN chmod +x /app/entrypoint_allinone.sh
 
-# ── Directories ──
-RUN mkdir -p /app/tests
-
-# ── Environment ──
-#   SHIELDCI_LOCAL_TOOLS=1  → run Kali tools in-process (no Docker-in-Docker)
-#   OLLAMA_HOST             → point to an Ollama instance (host or remote)
+# ── Environment ────────────────────────────────────────────
+# Tell the orchestrator to call kali_mcp.py locally (not docker run)
 ENV SHIELDCI_LOCAL_TOOLS=1
+ENV SHIELDCI_MCP_CMD="python3 /app/kali_mcp.py"
+
+# Ollama runs on the host — default for Docker Desktop
 ENV OLLAMA_HOST=http://host.docker.internal:11434
-ENV SHIELDCI_RESULTS_FILE=/app/tests/shield_results.json
 
-VOLUME ["/app/tests"]
-WORKDIR /app/tests
+# Target repo is mounted here
+VOLUME ["/workspace"]
+WORKDIR /workspace
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+ENTRYPOINT ["/app/entrypoint_allinone.sh"]
