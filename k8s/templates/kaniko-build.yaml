@@ -1,0 +1,128 @@
+# ── Kaniko Build Pod ──
+# Builds the customer's app into a container image without Docker daemon.
+# Runs in an isolated build namespace, pushes to internal registry only.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "build-{{SCAN_ID}}"
+  namespace: "build-{{SCAN_ID}}"
+  labels:
+    shieldci.io/component: builder
+    shieldci.io/scan-id: "{{SCAN_ID}}"
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 600  # 10 min build timeout
+
+  serviceAccountName: shieldci-builder-sa
+  automountServiceAccountToken: false
+
+  securityContext:
+    runAsNonRoot: false  # Kaniko requires root to build OCI images
+    seccompProfile:
+      type: RuntimeDefault
+
+  initContainers:
+    # Clone the repo first
+    - name: git-clone
+      image: alpine/git:latest
+      command:
+        - sh
+        - -c
+        - |
+          git clone --depth 1 --branch "{{BRANCH}}" "{{CLONE_URL}}" /workspace
+          cd /workspace && git checkout "{{COMMIT_SHA}}" 2>/dev/null || true
+      securityContext:
+        runAsUser: 10001
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        limits:
+          cpu: "500m"
+          memory: "256Mi"
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+
+  containers:
+    - name: kaniko
+      image: gcr.io/kaniko-project/executor:latest
+      args:
+        - "--context=/workspace"
+        - "--dockerfile=/workspace/Dockerfile"
+        - "--destination={{REGISTRY_HOST}}/shieldci-builds/{{SCAN_ID}}:latest"
+        - "--cache=true"
+        - "--cache-repo={{REGISTRY_HOST}}/shieldci-cache"
+        # Security: don't push to external registries
+        - "--insecure-registry={{REGISTRY_HOST}}"
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "512Mi"
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+          ephemeral-storage: "10Gi"
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+          readOnly: true
+        - name: kaniko-secret
+          mountPath: /kaniko/.docker
+          readOnly: true
+
+  volumes:
+    - name: workspace
+      emptyDir:
+        sizeLimit: "5Gi"
+    - name: kaniko-secret
+      secret:
+        secretName: registry-credentials
+        items:
+          - key: .dockerconfigjson
+            path: config.json
+---
+# ── Build namespace (ephemeral, same lifecycle as scan namespace) ──
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: "build-{{SCAN_ID}}"
+  labels:
+    app.kubernetes.io/managed-by: shieldci
+    shieldci.io/scan-id: "{{SCAN_ID}}"
+    shieldci.io/component: builder
+  annotations:
+    shieldci.io/ttl: "900"  # 15 min TTL for builds
+---
+# ── Build Network Policy: only allow egress to internal registry ──
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: build-isolation
+  namespace: "build-{{SCAN_ID}}"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []  # No inbound traffic at all
+  egress:
+    # Only allow pushing to internal registry
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              shieldci.io/component: control-plane
+          podSelector:
+            matchLabels:
+              shieldci.io/component: registry
+      ports:
+        - port: 5000
+          protocol: TCP
+    # Git clone requires HTTPS egress (to GitHub/GitLab)
+    - ports:
+        - port: 443
+          protocol: TCP
+    # DNS
+    - ports:
+        - port: 53
+          protocol: UDP

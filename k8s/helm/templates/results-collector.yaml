@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: results-collector
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: results-collector
+    app.kubernetes.io/part-of: shieldci
+spec:
+  replicas: {{ .Values.resultsCollector.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: results-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: results-collector
+    spec:
+      containers:
+        - name: results-collector
+          image: {{ .Values.resultsCollector.image }}
+          ports:
+            - containerPort: {{ .Values.resultsCollector.httpPort }}
+              name: http
+            - containerPort: {{ .Values.resultsCollector.mtlsPort }}
+              name: mtls
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: shieldci-db-credentials
+                  key: connection-string
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: shieldci-encryption-key
+                  key: key
+            - name: TLS_CERT
+              value: /etc/shieldci/tls/server.crt
+            - name: TLS_KEY
+              value: /etc/shieldci/tls/server.key
+            - name: TLS_CA
+              value: /etc/shieldci/tls/ca.crt
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel }}
+          resources:
+            {{- toYaml .Values.resultsCollector.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.resultsCollector.httpPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: tls-certs
+              mountPath: /etc/shieldci/tls
+              readOnly: true
+      volumes:
+        - name: tls-certs
+          secret:
+            secretName: results-collector-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: results-collector
+  namespace: {{ .Values.namespace }}
+spec:
+  selector:
+    app.kubernetes.io/name: results-collector
+  ports:
+    - port: {{ .Values.resultsCollector.httpPort }}
+      targetPort: {{ .Values.resultsCollector.httpPort }}
+      name: http
+    - port: {{ .Values.resultsCollector.mtlsPort }}
+      targetPort: {{ .Values.resultsCollector.mtlsPort }}
+      name: mtls

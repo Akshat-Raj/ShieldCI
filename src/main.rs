@@ -19,6 +19,9 @@ struct ShieldConfig {
     database: Option<DatabaseConfig>,
     auth: Option<AuthConfig>,
     files: Option<Vec<String>>,
+    scope: Option<ScopeConfig>,
+    sast: Option<SastConfig>,
+    sca: Option<ScaConfig>,
 }
 
 #[derive(Deserialize, Debug, Default)]
@@ -61,6 +64,31 @@ struct DatabaseConfig {
 #[derive(Deserialize, Debug, Default)]
 struct AuthConfig {
     enabled: Option<bool>,
+    token: Option<String>,
+    cookie: Option<String>,
+    api_key: Option<String>,
+    header_name: Option<String>,
+}
+
+// ── Scope & Authorization ──
+
+#[derive(Deserialize, Debug, Default)]
+struct ScopeConfig {
+    allowed_targets: Option<Vec<String>>,
+    authorization_proof: Option<String>,  // "dns" | "file" | "none"
+}
+
+// ── SAST config ──
+
+#[derive(Deserialize, Debug, Default)]
+struct SastConfig {
+    enabled: Option<bool>,
+    config: Option<String>,  // semgrep ruleset
+}
+
+#[derive(Deserialize, Debug, Default)]
+struct ScaConfig {
+    enabled: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -75,6 +103,8 @@ struct TargetConfig {
 struct ToolCall {
     tool: String,
     target: String,
+    #[serde(default)]
+    extra_args: HashMap<String, String>,
 }
 
 // ── Structured output for frontend API ──
@@ -264,13 +294,15 @@ async fn ask_llm(system_prompt: &str) -> ToolCall {
     if !response_text.contains("\"tool\"") {
         return ToolCall { 
             tool: "sqlmap_scan".to_string(), 
-            target: "http://host.docker.internal:3000/login?username=test".to_string() 
+            target: "http://host.docker.internal:3000/login?username=test".to_string(),
+            extra_args: HashMap::new(),
         };
     }
 
     serde_json::from_str(response_text).unwrap_or(ToolCall { 
         tool: "sqlmap_scan".to_string(), 
-        target: "http://host.docker.internal:3000/login?username=test".to_string() 
+        target: "http://host.docker.internal:3000/login?username=test".to_string(),
+        extra_args: HashMap::new(),
     })
 }
 
@@ -318,7 +350,27 @@ async fn execute_mcp_tool_stdio(tool_call: &ToolCall) -> Result<String, Box<dyn 
     let mcp_args = if tool_call.tool == "nmap_scan" {
         serde_json::json!({ "target": target_url })
     } else {
-        serde_json::json!({ "url": target_url })
+        tool_call.target.replace("127.0.0.1", "host.docker.internal")
+    };
+    let mcp_args = match tool_call.tool.as_str() {
+        "nmap_scan" => serde_json::json!({ "target": target_url }),
+        "semgrep_scan" => {
+            let config = tool_call.extra_args.get("config").cloned().unwrap_or_else(|| "auto".to_string());
+            serde_json::json!({ "path": target_url, "config": config })
+        }
+        "trivy_scan" => {
+            let scan_type = tool_call.extra_args.get("scan_type").cloned().unwrap_or_else(|| "fs".to_string());
+            serde_json::json!({ "path": target_url, "scan_type": scan_type })
+        }
+        "nuclei_scan" => {
+            let severity = tool_call.extra_args.get("severity").cloned().unwrap_or_else(|| "critical,high,medium".to_string());
+            serde_json::json!({ "url": target_url, "severity": severity })
+        }
+        "zap_scan" => {
+            let scan_type = tool_call.extra_args.get("scan_type").cloned().unwrap_or_else(|| "baseline".to_string());
+            serde_json::json!({ "url": target_url, "scan_type": scan_type })
+        }
+        _ => serde_json::json!({ "url": target_url }),
     };
     let call = serde_json::json!({
         "jsonrpc": "2.0", "id": 2, "method": "tools/call",
@@ -404,21 +456,52 @@ IMPORTANT: You MUST include actual code snippets from the source code showing vu
 }
 
 /// Generate a dynamic test plan based on the repo's YAML config.
-/// Each test is a (phase_name, tool, target) triple.
-fn generate_test_plan(shield_config: &Option<ShieldConfig>, docker_url: &str) -> Vec<(String, String, String)> {
-    let mut plan: Vec<(String, String, String)> = Vec::new();
+/// Each test is a (phase_name, tool, target, extra_args) tuple.
+fn generate_test_plan(shield_config: &Option<ShieldConfig>, docker_url: &str) -> Vec<(String, String, String, HashMap<String, String>)> {
+    let mut plan: Vec<(String, String, String, HashMap<String, String>)> = Vec::new();
+    let empty = HashMap::new();
 
-    // Phase 1: Always start with recon
-    plan.push(("RECON: Port Scan".into(), "nmap_scan".into(), docker_url.into()));
-    plan.push(("RECON: Security Headers".into(), "check_headers".into(), docker_url.into()));
+    // Phase 1: Recon
+    plan.push(("RECON: Port Scan".into(), "nmap_scan".into(), docker_url.into(), empty.clone()));
+    plan.push(("RECON: Security Headers".into(), "check_headers".into(), docker_url.into(), empty.clone()));
 
-    // Phase 2: Web vulnerability scanning
-    plan.push(("VULN SCAN: Web Server".into(), "nikto_scan".into(), docker_url.into()));
+    // Phase 2: SAST — static analysis of source code (runs before the app is even up)
+    let sast_enabled = shield_config.as_ref()
+        .and_then(|sc| sc.sast.as_ref())
+        .and_then(|s| s.enabled)
+        .unwrap_or(true); // on by default
+    if sast_enabled {
+        let sast_config = shield_config.as_ref()
+            .and_then(|sc| sc.sast.as_ref())
+            .and_then(|s| s.config.clone())
+            .unwrap_or_else(|| "auto".to_string());
+        let mut args = HashMap::new();
+        args.insert("config".to_string(), sast_config);
+        plan.push(("SAST: Source Code Analysis".into(), "semgrep_scan".into(), ".".into(), args));
+    }
 
-    // Phase 3: Directory discovery
-    plan.push(("DISCOVERY: Hidden Paths".into(), "gobuster_scan".into(), docker_url.into()));
+    // Phase 3: SCA — dependency vulnerability scanning
+    let sca_enabled = shield_config.as_ref()
+        .and_then(|sc| sc.sca.as_ref())
+        .and_then(|s| s.enabled)
+        .unwrap_or(true); // on by default
+    if sca_enabled {
+        plan.push(("SCA: Dependency Vulnerabilities".into(), "trivy_scan".into(), ".".into(), empty.clone()));
+    }
 
-    // Phase 4: Endpoint-specific attacks from YAML config
+    // Phase 4: Nuclei — replaces nikto with 8000+ templates
+    plan.push(("DAST: Nuclei Template Scan".into(), "nuclei_scan".into(), docker_url.into(), empty.clone()));
+
+    // Phase 5: Legacy web vuln scanning (still useful as a complement)
+    plan.push(("DAST: Web Server Scan".into(), "nikto_scan".into(), docker_url.into(), empty.clone()));
+
+    // Phase 6: Directory discovery
+    plan.push(("DISCOVERY: Hidden Paths".into(), "gobuster_scan".into(), docker_url.into(), empty.clone()));
+
+    // Phase 7: ZAP DAST — crawl + passive scan
+    plan.push(("DAST: ZAP Baseline".into(), "zap_scan".into(), docker_url.into(), empty.clone()));
+
+    // Phase 8: Endpoint-specific attacks from YAML config
     if let Some(ref sc) = shield_config {
         let uses_raw_sql = sc.database.as_ref()
             .map(|db| db.orm.unwrap_or(true) == false)
@@ -429,22 +512,20 @@ fn generate_test_plan(shield_config: &Option<ShieldConfig>, docker_url: &str) ->
                 if let Some(ref params) = ep.params {
                     if params.is_empty() { continue; }
 
-                    // Build attack URL with test params
                     let param_str: Vec<String> = params.iter()
                         .map(|p| format!("{}=test", p.name))
                         .collect();
                     let attack_url = format!("{}{}?{}", docker_url, ep.path, param_str.join("&"));
 
-                    // SQL injection test for endpoints with params, especially if raw SQL
                     if uses_raw_sql {
                         plan.push((
                             format!("SQLi: {} {}", ep.method.as_deref().unwrap_or("GET"), ep.path),
                             "sqlmap_scan".into(),
                             attack_url.clone(),
+                            empty.clone(),
                         ));
                     }
 
-                    // Always test endpoints with user input for SQLi
                     let has_user_input = params.iter().any(|p| {
                         let name = p.name.to_lowercase();
                         let desc = p.description.as_deref().unwrap_or("").to_lowercase();
@@ -459,6 +540,7 @@ fn generate_test_plan(shield_config: &Option<ShieldConfig>, docker_url: &str) ->
                             format!("SQLi: {} {}", ep.method.as_deref().unwrap_or("GET"), ep.path),
                             "sqlmap_scan".into(),
                             attack_url,
+                            empty.clone(),
                         ));
                     }
                 }
@@ -466,7 +548,6 @@ fn generate_test_plan(shield_config: &Option<ShieldConfig>, docker_url: &str) ->
         }
     }
 
-    // Deduplicate
     plan.dedup_by(|a, b| a.1 == b.1 && a.2 == b.2);
     plan
 }
@@ -497,7 +578,7 @@ async fn main() {
     // ── Generate dynamic test plan ──
     let test_plan = generate_test_plan(&shield_config, &docker_url);
     println!("\nTest Plan ({} tests):", test_plan.len());
-    for (i, (phase, tool, target)) in test_plan.iter().enumerate() {
+    for (i, (phase, tool, target, _)) in test_plan.iter().enumerate() {
         println!("  {}. [{}] {} → {}", i + 1, phase, tool, target);
     }
 
@@ -506,10 +587,10 @@ async fn main() {
     let total = test_plan.len();
 
     // ── Execute each planned test ──
-    for (i, (phase, tool, target)) in test_plan.iter().enumerate() {
+    for (i, (phase, tool, target, extra_args)) in test_plan.iter().enumerate() {
         println!("\nTest {}/{}: {}", i + 1, total, phase);
 
-        let tool_call = ToolCall { tool: tool.clone(), target: target.clone() };
+        let tool_call = ToolCall { tool: tool.clone(), target: target.clone(), extra_args: extra_args.clone() };
         let output = execute_mcp_tool_stdio(&tool_call).await.unwrap_or_else(|e| e.to_string());
 
         attack_trace.push_str(&format!(
@@ -544,29 +625,47 @@ async fn main() {
     } else { String::new() };
 
     let adaptive_prompt = format!(
-        "You are a penetration tester. Target: {docker_url}\n\
-        \n\
-        Previous scan results:\n{attack_trace}\n\
-        \n\
-        {db_info}\
-        {endpoint_info}\
-        \n\
-        Application source code:\n{codebase}\n\
-        \n\
-        Available tools (use EXACT names):\n\
-        - nmap_scan: target = \"{docker_url}\"\n\
-        - check_headers: target = \"{docker_url}\"\n\
-        - nikto_scan: target = \"{docker_url}\"\n\
-        - gobuster_scan: target = \"{docker_url}\"\n\
-        - sqlmap_scan: target = URL with query params like \"{docker_url}/login?username=test\"\n\
-        \n\
-        Based on the scan results above, pick ONE more test that could reveal something the previous tests missed.\n\
-        Respond with ONLY a JSON object: {{\"tool\": \"<tool_name>\", \"target\": \"<url>\"}}"
+        "You are an expert penetration tester following PTES (Penetration Testing Execution Standard) \
+and OWASP Testing Guide v4.2 methodology. Target: {docker_url}\n\
+\n\
+## Your Role: Result Correlation & Attack Chaining\n\
+Do NOT just pick another tool randomly. Analyze the results below and identify:\n\
+1. Attack chains: e.g., gobuster found /admin → try default creds with sqlmap or brute-force\n\
+2. Unexplored surfaces: e.g., nmap found port 8443 → scan that too\n\
+3. Findings that need validation: e.g., nuclei flagged XSS → confirm with targeted payload\n\
+4. Missing OWASP Top 10 coverage: check which categories haven't been tested yet\n\
+\n\
+## Previous Scan Results (ANALYZE THESE CAREFULLY):\n{attack_trace}\n\
+\n\
+{db_info}\
+{endpoint_info}\
+\n\
+## Application Source Code (look for patterns the scanners missed):\n{codebase}\n\
+\n\
+## Available tools (use EXACT names):\n\
+- nmap_scan: target = \"{docker_url}\" — port scanning\n\
+- check_headers: target = \"{docker_url}\" — security header check\n\
+- nikto_scan: target = \"{docker_url}\" — legacy web vuln scanner\n\
+- gobuster_scan: target = \"{docker_url}\" — directory brute-force\n\
+- sqlmap_scan: target = URL with query params like \"{docker_url}/login?username=test\"\n\
+- nuclei_scan: target = \"{docker_url}\" — 8000+ vulnerability templates\n\
+- semgrep_scan: target = \".\" — static source code analysis\n\
+- trivy_scan: target = \".\" — dependency CVE scanner\n\
+- zap_scan: target = \"{docker_url}\" — OWASP ZAP DAST crawler\n\
+\n\
+## Instructions:\n\
+Based on correlating ALL results above, pick the ONE most valuable next test.\n\
+Explain your reasoning in 1 sentence, then respond with ONLY a JSON object:\n\
+{{\"tool\": \"<tool_name>\", \"target\": \"<url_or_path>\"}}"
     );
 
     for i in 1..=2 {
-        println!("\n--- Adaptive Strike {} ---", i);
-        let tool_call = ask_llm(&adaptive_prompt).await;
+        println!("\n--- Adaptive Strike {} (LLM-correlated) ---", i);
+        let mut tool_call = ask_llm(&adaptive_prompt).await;
+        // Ensure extra_args exist for new tools
+        if tool_call.extra_args.is_empty() {
+            tool_call.extra_args = HashMap::new();
+        }
         let output = execute_mcp_tool_stdio(&tool_call).await.unwrap_or_else(|e| e.to_string());
 
         attack_trace.push_str(&format!(
@@ -593,8 +692,58 @@ async fn main() {
         report_markdown: report,
     };
     let json_output = serde_json::to_string_pretty(&scan_output).unwrap_or_default();
-    fs::write("shield_results.json", &json_output).expect("Unable to write results JSON");
-    println!("Saved structured results to shield_results.json");
+
+    // Write to local file (path from env or default)
+    let results_path = std::env::var("SHIELDCI_RESULTS_FILE")
+        .unwrap_or_else(|_| "shield_results.json".to_string());
+    fs::write(&results_path, &json_output).expect("Unable to write results JSON");
+    println!("Saved structured results to {}", results_path);
+
+    // ── Push results to collector (K8s mode) ──
+    if let Ok(endpoint) = std::env::var("SHIELDCI_RESULTS_ENDPOINT") {
+        let scan_id = std::env::var("SHIELDCI_SCAN_ID").unwrap_or_default();
+        let tenant_id = std::env::var("SHIELDCI_TENANT_ID").unwrap_or_default();
+        push_results_to_collector(&endpoint, &scan_id, &tenant_id, &json_output).await;
+    }
+}
+
+/// Push scan results to the results-collector service (K8s mode).
+async fn push_results_to_collector(endpoint: &str, scan_id: &str, tenant_id: &str, json_output: &str) {
+    println!("Pushing results to collector: {}", endpoint);
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .danger_accept_invalid_certs(
+            std::env::var("SHIELDCI_SKIP_TLS_VERIFY").unwrap_or_default() == "1"
+        )
+        .build()
+        .unwrap_or_default();
+
+    let payload = serde_json::json!({
+        "scanId": scan_id,
+        "tenantId": tenant_id,
+        "results": serde_json::from_str::<serde_json::Value>(json_output).unwrap_or_default(),
+    });
+
+    match client.post(endpoint)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                println!("Results pushed successfully (HTTP {})", status);
+            } else {
+                let body = resp.text().await.unwrap_or_default();
+                eprintln!("Results push failed (HTTP {}): {}", status, body);
+            }
+        }
+        Err(e) => {
+            eprintln!("Results push error: {}", e);
+        }
+    }
 }
 
 /// Extract vulnerability entries from the attack trace.
@@ -625,16 +774,24 @@ fn parse_vulns_from_trace(trace: &str) -> Vec<VulnOutput> {
             "Exposed Path"
         } else if lower.contains("nmap") || lower.contains("port") {
             "Open Port"
+        } else if lower.contains("nuclei") {
+            "Nuclei Finding"
+        } else if lower.contains("semgrep") || lower.contains("sast") {
+            "SAST Finding"
+        } else if lower.contains("trivy") || lower.contains("sca") || lower.contains("dependency") {
+            "Vulnerable Dependency"
+        } else if lower.contains("zap") || lower.contains("csrf") || lower.contains("idor") {
+            "DAST Finding"
         } else {
             "Security Issue"
         };
 
         // Determine severity
-        let severity = if lower.contains("sql injection") || lower.contains("sqlmap") || lower.contains("sqli") {
+        let severity = if lower.contains("sql injection") || lower.contains("sqlmap") || lower.contains("sqli") || lower.contains("critical") {
             "Critical"
-        } else if lower.contains("xss") || lower.contains("auth") {
+        } else if lower.contains("xss") || lower.contains("auth") || lower.contains("high") {
             "High"
-        } else if lower.contains("header") || lower.contains("nikto") {
+        } else if lower.contains("header") || lower.contains("nikto") || lower.contains("medium") {
             "Medium"
         } else {
             "Low"

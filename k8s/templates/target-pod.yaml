@@ -1,0 +1,104 @@
+# ── Target Application Pod ──
+# Runs the customer's app in a hardened container.
+# Built by Kaniko in a separate build namespace, pulled from internal registry.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: target-app
+  namespace: "scan-{{SCAN_ID}}"
+  labels:
+    shieldci.io/role: target
+    shieldci.io/scan-id: "{{SCAN_ID}}"
+    shieldci.io/tenant-id: "{{TENANT_ID}}"
+spec:
+  runtimeClassName: gvisor
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10002
+    runAsGroup: 10002
+    fsGroup: 10002
+    seccompProfile:
+      type: RuntimeDefault
+
+  activeDeadlineSeconds: {{TTL_SECONDS}}
+  restartPolicy: Never
+
+  serviceAccountName: shieldci-target-sa
+  automountServiceAccountToken: false
+
+  containers:
+    - name: app
+      image: "{{TARGET_IMAGE}}"
+      imagePullPolicy: Always
+
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: false  # apps need to write their own data
+        capabilities:
+          drop: ["ALL"]
+
+      env:
+        # Inject safe test-only database credentials — never real secrets
+        - name: DATABASE_URL
+          value: "sqlite:///tmp/test.db"
+        - name: NODE_ENV
+          value: "test"
+        - name: PORT
+          value: "{{APP_PORT}}"
+
+      ports:
+        - containerPort: {{APP_PORT}}
+          name: http
+          protocol: TCP
+
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "256Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+          ephemeral-storage: "2Gi"
+
+      # Health check — engine waits for this before scanning
+      readinessProbe:
+        httpGet:
+          path: /
+          port: {{APP_PORT}}
+        initialDelaySeconds: 5
+        periodSeconds: 3
+        failureThreshold: 20
+
+      volumeMounts:
+        - name: app-tmp
+          mountPath: /tmp
+        - name: app-data
+          mountPath: /data
+
+  volumes:
+    - name: app-tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: "256Mi"
+    - name: app-data
+      emptyDir:
+        sizeLimit: "1Gi"
+---
+# ── Service exposing the target app within the scan namespace ──
+apiVersion: v1
+kind: Service
+metadata:
+  name: target-app
+  namespace: "scan-{{SCAN_ID}}"
+  labels:
+    shieldci.io/role: target
+spec:
+  selector:
+    shieldci.io/role: target
+  ports:
+    - port: {{APP_PORT}}
+      targetPort: {{APP_PORT}}
+      protocol: TCP
+      name: http
+  type: ClusterIP

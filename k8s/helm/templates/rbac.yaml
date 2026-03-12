@@ -1,0 +1,63 @@
+# ── Dispatcher ServiceAccount + ClusterRole ──
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shieldci-dispatcher
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shieldci-dispatcher
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "serviceaccounts", "secrets", "resourcequotas", "limitranges"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: shieldci-dispatcher
+subjects:
+  - kind: ServiceAccount
+    name: shieldci-dispatcher
+    namespace: {{ .Values.namespace }}
+roleRef:
+  kind: ClusterRole
+  name: shieldci-dispatcher
+  apiGroup: rbac.authorization.k8s.io
+---
+# ── TTL Controller ServiceAccount + ClusterRole ──
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shieldci-ttl-controller
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: shieldci-ttl-controller
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: shieldci-ttl-controller
+subjects:
+  - kind: ServiceAccount
+    name: shieldci-ttl-controller
+    namespace: {{ .Values.namespace }}
+roleRef:
+  kind: ClusterRole
+  name: shieldci-ttl-controller
+  apiGroup: rbac.authorization.k8s.io

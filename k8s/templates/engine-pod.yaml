@@ -1,0 +1,126 @@
+# ── ShieldCI Engine Pod ──
+# Runs Kali security tools + Rust orchestrator inside a gVisor-sandboxed,
+# non-root, read-only, capability-dropped container.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: shieldci-engine
+  namespace: "scan-{{SCAN_ID}}"
+  labels:
+    shieldci.io/role: engine
+    shieldci.io/scan-id: "{{SCAN_ID}}"
+    shieldci.io/tenant-id: "{{TENANT_ID}}"
+spec:
+  # gVisor runtime — intercepts all syscalls via userspace kernel.
+  # Prevents container escape even with kernel exploits.
+  runtimeClassName: gvisor
+
+  # Pod-level security
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Hard deadline: pod dies after TTL no matter what
+  activeDeadlineSeconds: {{TTL_SECONDS}}
+
+  # Never restart — scan either completes or fails
+  restartPolicy: Never
+
+  # Service account with zero permissions
+  serviceAccountName: shieldci-engine-sa
+  automountServiceAccountToken: false
+
+  containers:
+    - name: engine
+      image: "{{ENGINE_IMAGE}}"
+      imagePullPolicy: Always
+
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+          # NET_RAW: required by nmap for raw socket scanning
+          add: ["NET_RAW"]
+
+      env:
+        - name: SHIELDCI_LOCAL_TOOLS
+          value: "1"
+        - name: OLLAMA_HOST
+          value: "http://ollama.shieldci-control-plane.svc.cluster.local:11434"
+        - name: SHIELDCI_RESULTS_ENDPOINT
+          value: "https://results-collector.shieldci-control-plane.svc.cluster.local:8443/submit"
+        - name: SHIELDCI_SCAN_ID
+          value: "{{SCAN_ID}}"
+        - name: SHIELDCI_TENANT_ID
+          value: "{{TENANT_ID}}"
+        # mTLS client cert for results submission
+        - name: SHIELDCI_CLIENT_CERT
+          value: /etc/shieldci/tls/client.crt
+        - name: SHIELDCI_CLIENT_KEY
+          value: /etc/shieldci/tls/client.key
+
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "512Mi"
+        limits:
+          cpu: "2"
+          memory: "2Gi"
+          ephemeral-storage: "5Gi"
+
+      volumeMounts:
+        - name: results-tmp
+          mountPath: /results
+        - name: tmp
+          mountPath: /tmp
+        - name: repo-source
+          mountPath: /app/tests
+          readOnly: true
+        - name: tls-certs
+          mountPath: /etc/shieldci/tls
+          readOnly: true
+
+  initContainers:
+    # Clone the customer's repo before the scan starts
+    - name: git-clone
+      image: alpine/git:latest
+      command:
+        - sh
+        - -c
+        - |
+          git clone --depth 1 --branch "{{BRANCH}}" "{{CLONE_URL}}" /repo
+          cd /repo && git checkout "{{COMMIT_SHA}}" 2>/dev/null || true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: false
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        limits:
+          cpu: "500m"
+          memory: "256Mi"
+      volumeMounts:
+        - name: repo-source
+          mountPath: /repo
+
+  volumes:
+    - name: results-tmp
+      emptyDir:
+        sizeLimit: "1Gi"
+    - name: tmp
+      emptyDir:
+        medium: Memory  # RAM disk — never touches node disk
+        sizeLimit: "512Mi"
+    - name: repo-source
+      emptyDir:
+        sizeLimit: "2Gi"
+    - name: tls-certs
+      secret:
+        secretName: "scan-{{SCAN_ID}}-tls"

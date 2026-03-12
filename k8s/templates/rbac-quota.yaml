@@ -1,0 +1,78 @@
+# ── RBAC: Minimal permissions for scan pods ──
+# Engine and target service accounts have ZERO Kubernetes API access.
+# They cannot list pods, read secrets, or escape their namespace.
+
+---
+# Engine pod service account — no permissions attached
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shieldci-engine-sa
+  namespace: "scan-{{SCAN_ID}}"
+  labels:
+    shieldci.io/scan-id: "{{SCAN_ID}}"
+automountServiceAccountToken: false
+
+---
+# Target pod service account — no permissions attached
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shieldci-target-sa
+  namespace: "scan-{{SCAN_ID}}"
+  labels:
+    shieldci.io/scan-id: "{{SCAN_ID}}"
+automountServiceAccountToken: false
+
+---
+# Builder service account — no k8s API access
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shieldci-builder-sa
+  namespace: "build-{{SCAN_ID}}"
+  labels:
+    shieldci.io/scan-id: "{{SCAN_ID}}"
+automountServiceAccountToken: false
+
+---
+# ── Resource Quota per scan namespace ──
+# Prevents a single tenant from consuming all cluster resources
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: scan-quota
+  namespace: "scan-{{SCAN_ID}}"
+spec:
+  hard:
+    requests.cpu: "3"
+    requests.memory: "2Gi"
+    limits.cpu: "4"
+    limits.memory: "4Gi"
+    pods: "3"                    # max 3 pods (engine + target + 1 buffer)
+    persistentvolumeclaims: "0"  # no persistent storage — ephemeral only
+    services: "2"
+    secrets: "2"
+
+---
+# ── Limit Range: per-container defaults & maximums ──
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: scan-limits
+  namespace: "scan-{{SCAN_ID}}"
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "500m"
+        memory: "512Mi"
+      defaultRequest:
+        cpu: "250m"
+        memory: "256Mi"
+      max:
+        cpu: "2"
+        memory: "2Gi"
+      min:
+        cpu: "100m"
+        memory: "64Mi"

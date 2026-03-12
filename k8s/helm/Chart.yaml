@@ -1,0 +1,16 @@
+apiVersion: v2
+name: shieldci
+description: ShieldCI — Automated security scanning platform with K8s sandbox isolation
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - security
+  - scanning
+  - pentest
+  - sast
+  - dast
+  - kubernetes
+home: https://github.com/shieldci/shieldci
+maintainers:
+  - name: ShieldCI

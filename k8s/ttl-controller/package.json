@@ -1,0 +1,11 @@
+{
+  "name": "shieldci-ttl-controller",
+  "version": "0.1.0",
+  "description": "Namespace TTL controller — auto-deletes expired scan/build namespaces",
+  "main": "src/index.js",
+  "scripts": { "start": "node src/index.js" },
+  "dependencies": {
+    "@kubernetes/client-node": "^0.21.0",
+    "pino": "^8.16.0"
+  }
+}

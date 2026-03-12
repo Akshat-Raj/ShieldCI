@@ -1,0 +1,99 @@
+# ── ShieldCI Helm Values ──
+
+namespace: shieldci-control-plane
+
+# ── Dispatcher ──
+dispatcher:
+  replicas: 2
+  image: shieldci/dispatcher:latest
+  port: 3002
+  maxConcurrentScans: 5
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+# ── Results Collector ──
+resultsCollector:
+  replicas: 2
+  image: shieldci/results-collector:latest
+  httpPort: 8080
+  mtlsPort: 8443
+  retentionDays: 90
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ── TTL Controller ──
+ttlController:
+  image: shieldci/ttl-controller:latest
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# ── Ollama (LLM) ──
+ollama:
+  enabled: true
+  image: ollama/ollama:latest
+  model: llama3.1
+  resources:
+    requests:
+      cpu: "1"
+      memory: 4Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  storageLimit: 20Gi
+
+# ── Redis ──
+redis:
+  image: redis:7-alpine
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ── PostgreSQL ──
+postgresql:
+  image: postgres:16-alpine
+  database: shieldci
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# ── Engine (scan runtime) ──
+engine:
+  image: shieldci/kali-engine:latest
+  scanTtlSeconds: 1800
+  buildTimeoutSeconds: 600
+
+# ── Registry (in-cluster image cache) ──
+registry:
+  host: registry.shieldci-control-plane.svc.cluster.local:5000
+
+# ── Secrets ──
+# In production, use sealed-secrets or external-secrets-operator.
+secrets:
+  dbPassword: "CHANGE_ME_BEFORE_DEPLOY"
+  encryptionKey: "CHANGE_ME_GENERATE_WITH_OPENSSL_RAND_HEX_32"
+
+# ── Log Level ──
+logLevel: info
